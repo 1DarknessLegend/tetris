@@ -1,17 +1,17 @@
-// Canvas и контекст
+// === Инициализация канваса и контекста ===
 const canvas = document.getElementById('tetris');
 const ctx    = canvas.getContext('2d');
 ctx.scale(20, 20);
 ctx.imageSmoothingEnabled = false;
 
-// Счёт, баланс, таймер
+// === Глобальные переменные для очков, баланса и интервалов ===
 let score        = 0;
 let balance      = 0;
 let dropInterval = 1000;
 let lastTime     = 0;
 let dropCounter  = 0;
 
-// Темы
+// === Список всех тем и их состояния ===
 const themes = [
   'theme','chipmunk','glent','billy','pidors','bosinn','billyv2','edit',
   'gigachad','maga','sneakedup','goblingang','sexibetmen','sigma',
@@ -19,20 +19,21 @@ const themes = [
 ];
 const bought = {};
 const active = {};
+
+// === Кнопки ВКЛ/ВЫКЛ тем ===
 themes.forEach(t => { bought[t] = false; active[t] = false; });
 
-// UI-элементы
+// === Получение DOM-элементов интерфейса ===
 const scoreEl   = document.getElementById('score');
 const balanceEl = document.getElementById('balance');
 const gameDiv   = document.getElementById('game');
 const shopDiv   = document.getElementById('shop-screen');
 const easterDiv = document.getElementById('easter-screen');
 
-// Поисковик в магазине
 const searchInput = document.getElementById('search');
 const shopItems   = document.querySelectorAll('.shop-item');
-// растягиваем поле поиска на всю ширину (стандартная высота браузера)
-/* Поле поиска */
+
+// === Поиск по темам в магазине ===
 searchInput.style.width = '100%';
 searchInput.addEventListener('input', function() {
   const q = this.value.toLowerCase();
@@ -41,7 +42,7 @@ searchInput.addEventListener('input', function() {
   });
 });
 
-// Аудио/видео
+// === Загрузка музыки и видео по темам ===
 const mellMusic = document.getElementById('mell-music');
 const vids = {};
 themes.slice(1).forEach(t => {
@@ -49,33 +50,32 @@ themes.slice(1).forEach(t => {
   if (el) { vids[t] = el; el.load(); }
 });
 
-// Фон для темы «Мелстрой»
+// === Фоновое изображение для стандартной темы ===
 const mellBG = new Image();
 mellBG.src = 'https://avatars.mds.yandex.net/i?id=f929b30edd21b71bed35148895c13bd3_l-4531164-images-thumbs&n=13';
 
-// Обновление UI
+// === Функции обновления очков и баланса ===
 function updateScore()   { scoreEl.textContent   = 'Очки: ' + score; }
+
 function updateBalance() { balanceEl.textContent = 'Баланс: ' + balance; }
 
-// Покупка тем с обновлением текста той же кнопки
+// === Покупка тем с симуляцией загрузки ===
 themes.forEach(function(t) {
   var buyBtn = document.getElementById("buy-" + t);
   var actionsDiv = document.getElementById(t + "-actions");
   if (!buyBtn || !actionsDiv) return;
 
   buyBtn.addEventListener("click", async function() {
-    // Проверяем покупку и баланс
+    
     if (!bought[t] && balance >= 200) {
-      // Списываем очки и отмечаем покупку
+      
       balance -= 200;
       bought[t] = true;
       updateBalance();
 
-      // Переводим кнопку в состояние загрузки
       buyBtn.disabled = true;
       buyBtn.textContent = "Загрузка: 0%";
 
-      // Определяем URL медиафайла
       var mediaUrl;
       if (t === "theme") {
         mediaUrl = mellMusic.src;
@@ -91,7 +91,6 @@ themes.forEach(function(t) {
         var received = 0;
         var chunks = [];
 
-        // Считываем поток и обновляем проценты
         while (true) {
           var result = await reader.read();
           if (result.done) break;
@@ -101,7 +100,6 @@ themes.forEach(function(t) {
           buyBtn.textContent = "Загрузка: " + percent + "%";
         }
 
-        // Собираем Blob и заменяем источник плеера
         var blob = new Blob(chunks);
         var objectUrl = URL.createObjectURL(blob);
         if (t === "theme") {
@@ -111,29 +109,28 @@ themes.forEach(function(t) {
           if (video) video.src = objectUrl;
         }
 
-        // Скрываем кнопку покупки и показываем панель действий
         buyBtn.style.display = "none";
         actionsDiv.style.display = "flex";
 
       } catch (err) {
         console.error(err);
-        // Возвращаем баланс и сбрасываем статус покупки
+        
         balance += 200;
         bought[t] = false;
         updateBalance();
-        // Разблокируем кнопку и предлагаем повтор
+        
         buyBtn.disabled = false;
         buyBtn.textContent = "Ошибка загрузки";
       }
 
     } else if (!bought[t]) {
-      // Недостаточно баллов
+      
       alert("Недостаточно очков для покупки темы " + t);
     }
   });
 });
 
-// Активация/деактивация тем
+// === Кнопки ВКЛ/ВЫКЛ тем ===
 themes.forEach(t => {
   const applyBtn  = document.getElementById(`apply-${t}`);
   const removeBtn = document.getElementById(`remove-${t}`);
@@ -156,7 +153,7 @@ themes.forEach(t => {
   }
 });
 
-// Открыть/закрыть магазин и пасхалку
+// === Переходы между экранами (магазин, игра, пасхалка) ===
 document.getElementById('shop').addEventListener('click', () => {
   shopDiv.style.display = 'flex';
   gameDiv.style.display = 'none';
@@ -165,6 +162,7 @@ document.getElementById('return-shop').addEventListener('click', () => {
   shopDiv.style.display = 'none';
   gameDiv.style.display = 'block';
 });
+
 document.getElementById('easter-egg').addEventListener('click', () => {
   easterDiv.style.display = 'block';
   gameDiv.style.display   = 'none';
@@ -174,7 +172,7 @@ document.getElementById('return').addEventListener('click', () => {
   gameDiv.style.display   = 'block';
 });
 
-// Секретное меню
+// === Пасхальное меню ===
 const secretBtn = document.getElementById('secret-btn');
 const secretMenu = document.createElement('div');
 secretMenu.id = 'secret-menu';
@@ -212,13 +210,13 @@ closeSecret.addEventListener('click', () => {
   secretMenu.style.display = 'none';
 });
 
-// Логика Кейс
+// === Интерфейс открытия кейса ===
 const caseBtn       = document.getElementById('case-btn');
 const caseScreen    = document.getElementById('case-screen');
 const returnCaseBtn = document.getElementById('return-case');
 const timerEl       = document.getElementById('timer');
 const openCaseBtn   = document.getElementById('open-case');
-let caseAvailableAt = Date.now() + 5 * 60 * 1000; // 5 минут
+let caseAvailableAt = Date.now() + 5 * 60 * 1000;
 const rewards       = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000]
 
 caseBtn.addEventListener('click', () => {
@@ -231,6 +229,7 @@ returnCaseBtn.addEventListener('click', () => {
   gameDiv.style.display    = 'block';
 });
 
+// === Таймер до следующего кейса ===
 function updateCaseTimer() {
   const diff = caseAvailableAt - Date.now();
   if (diff <= 0) {
@@ -251,11 +250,9 @@ openCaseBtn.addEventListener('click', () => {
   scroll.innerHTML = '';
   indicator.style.left = '50%';
 
-  // Сброс стилей
   scroll.style.transition = 'none';
   scroll.style.transform = 'translateX(0)';
 
-  // Добавим небольшую задержку, чтобы transition применился снова
   setTimeout(() => {
     const pool = [];
     for (let i = 0; i < 50; i++) {
@@ -273,7 +270,6 @@ openCaseBtn.addEventListener('click', () => {
     const wrapperWidth = scrollWrapper.offsetWidth;
     const centerOffset = (stopIndex * itemWidth) - (wrapperWidth / 2) + (itemWidth / 2);
 
-    // Устанавливаем transition после сброса
     scroll.style.transition = 'transform 5s cubic-bezier(0.15, 0.85, 0.35, 1)';
     scroll.style.transform = `translateX(${-centerOffset}px)`;
     openCaseBtn.disabled = true;
@@ -294,7 +290,7 @@ openCaseBtn.addEventListener('click', () => {
   }, 50);
 });
 
-// Логика Тетриса
+// === Игровая логика: арена, игрок, фигуры ===
 function createMatrix(w, h) {
   const matrix = [];
   while (h--) matrix.push(new Array(w).fill(0));
@@ -303,6 +299,7 @@ function createMatrix(w, h) {
 const arena = createMatrix(12, 20);
 const player = { pos:{x:0,y:0}, matrix: null };
 
+// --- Проверка столкновений ---
 function collide(arena, player) {
   const [m, o] = [player.matrix, player.pos];
   return m.some((row,y) =>
@@ -317,6 +314,7 @@ function collide(arena, player) {
   );
 }
 
+// --- Создание фигур ---
 function createPiece(type) {
   switch(type) {
     case 'T': return [[0,0,0],[1,1,1],[0,1,0]];
@@ -329,6 +327,7 @@ function createPiece(type) {
   }
 }
 
+// --- Поворот фигуры ---
 function rotate(matrix, dir) {
   for (let y=0; y<matrix.length; ++y) {
     for (let x=0; x<y; ++x) {
@@ -338,8 +337,10 @@ function rotate(matrix, dir) {
   dir > 0 ? matrix.forEach(r => r.reverse()) : matrix.reverse();
 }
 
+// --- Цвета фигур ---
 const colors = [ null,'#FF0D72','#0DC2FF','#0DFF72','#F538FF','#FF8E0D','#FFE138','#3877FF' ];
 
+// --- Отрисовка фигур ---
 function drawMatrix(matrix, offset) {
   matrix.forEach((row,y) =>
     row.forEach((val,x) => {
@@ -355,6 +356,7 @@ function drawMatrix(matrix, offset) {
   );
 }
 
+// --- Основной рендеринг игры ---
 function draw() {
   if (active.theme && mellBG.complete) {
     ctx.save(); ctx.setTransform(1,0,0,1,0,0);
@@ -378,6 +380,7 @@ function draw() {
   drawMatrix(player.matrix, player.pos);
 }
 
+// --- Очистка заполненных линий ---
 function arenaSweep() {
   let rowCount = 1;
   outer: for (let y=arena.length-1; y>=0; --y) {
@@ -395,6 +398,7 @@ function arenaSweep() {
   }
 }
 
+// --- Слияние фигуры с ареной ---
 function merge(arena, player) {
   player.matrix.forEach((row,y) =>
     row.forEach((val,x) => {
@@ -403,6 +407,7 @@ function merge(arena, player) {
   );
 }
 
+// --- Сброс игрока и новая фигура ---
 function playerReset() {
   const pieces = 'TJLOSZI';
   player.matrix = createPiece(pieces[Math.floor(Math.random()*pieces.length)]);
@@ -414,22 +419,27 @@ function playerReset() {
   }
 }
 
+// --- Падение фигуры вниз ---
 function playerDrop() {
   player.pos.y++;
   if (collide(arena,player)) {
     player.pos.y--;
     merge(arena,player);
-    playerReset();
+    
+// === Инициализация игры ===
+playerReset();
     arenaSweep();
   }
   dropCounter = 0;
 }
 
+// --- Перемещение влево/вправо ---
 function playerMove(dir) {
   player.pos.x += dir;
   if (collide(arena,player)) player.pos.x -= dir;
 }
 
+// --- Поворот фигуры игрока ---
 function playerRotate(dir) {
   const pos = player.pos.x;
   let offset = 1;
@@ -445,6 +455,7 @@ function playerRotate(dir) {
   }
 }
 
+// --- Игровой цикл ---
 function update(time=0) {
   const delta = time - lastTime;
   lastTime = time;
@@ -454,7 +465,7 @@ function update(time=0) {
   requestAnimationFrame(update);
 }
 
-// Кнопки управления
+// === Управление с помощью кнопок на экране ===
 ['left','right','down','rotate'].forEach(id => {
   const btn = document.getElementById(id);
   let iv, tapped = false;
@@ -472,7 +483,7 @@ function update(time=0) {
   btn.addEventListener('touchend',  e=>{ e.preventDefault(); clearInterval(iv); tapped=true; },{passive:false});
 });
 
-// Клавиши
+// === Управление с клавиатуры ===
 document.addEventListener('keydown', e => {
   if (e.key==='ArrowLeft')  playerMove(-1);
   if (e.key==='ArrowRight') playerMove(1);
@@ -480,12 +491,13 @@ document.addEventListener('keydown', e => {
   if (e.key==='ArrowUp')    playerRotate(1);
 });
 
-// Старт
+// === Инициализация игры ===
 playerReset();
 updateScore();
 updateBalance();
 update();
 
+// === Firebase: онлайн-пользователи ===
 const firebaseConfig = {
   apiKey: "AIzaSyB1N9wwPZh1vQkIt-V7by8FW-7xoZobsDg",
   authDomain: "tetris2-71bfa.firebaseapp.com",
