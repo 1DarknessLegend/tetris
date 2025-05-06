@@ -1,7 +1,9 @@
+/* === Выделение текста === */
 ::selection {
   background: transparent;
 }
 
+/* === Основные стили страницы === */
 body {
   background: #000;
   color: #fff;
@@ -12,21 +14,25 @@ body {
   user-select: none;
 }
 
+/* === Заголовок игры === */
 h1 {
   margin: 5px 0;
   font-size: 32px;
 }
 
+/* === Счёт игрока === */
 #score {
   font-size: 24px;
   margin-top: 5px;
 }
 
+/* === Баланс в магазине === */
 #balance {
   font-size: 20px;
   margin: 5px 0 20px;
 }
 
+/* === Игровое поле === */
 canvas {
   width: 240px;
   height: 400px;
@@ -36,17 +42,24 @@ canvas {
   margin: 10px auto;
 }
 
+/* === Кнопки управления (влево, вправо и т.д.) === */
 .controls,
+
 .bottom-buttons {
   display: flex;
   justify-content: center;
   margin: 10px 0;
 }
 
+/* === Общие стили кнопок === */
 button,
-.controls button,
+.controls 
+/* === Общие стили кнопок === */
+button,
 #shop,
 #easter-egg,
+
+/* === Кнопка назад === */
 .controls-btn {
   background: #333;
   color: #fff;
@@ -69,7 +82,7 @@ button:active,
   background: #555;
 }
 
-/* Экран магазина */
+/* === Экран магазина === */
 #shop-screen {
   position: fixed;
   top: 0;
@@ -83,10 +96,13 @@ button:active,
 
 #shop-screen > h1,
 #shop-screen > .controls-btn,
+
+/* === Баланс в магазине === */
 #balance {
   flex: 0 0 auto;
 }
 
+/* === Поле поиска тем в магазине === */
 #search {
   width: 100%;
   height: 50px;
@@ -101,18 +117,21 @@ button:active,
   flex: none;
 }
 
+/* === Список предметов магазина === */
 #shop-items {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 10px 0;
 }
 
+/* === Отдельный предмет магазина === */
 .shop-item {
   width: 90%;
   max-width: 360px;
   margin: 20px auto;
 }
 
+/* === Строка с описанием и кнопкой покупки === */
 .shop-row {
   display: flex;
   align-items: center;
@@ -124,6 +143,7 @@ button:active,
   min-width: 0;
 }
 
+/* === Кнопки включения/выключения темы === */
 .actions {
   display: none;
   flex-direction: column;
@@ -135,6 +155,7 @@ button:active,
   width: 100%;
 }
 
+/* === Кнопка назад === */
 .controls-btn {
   position: absolute;
   top: 10px;
@@ -143,7 +164,7 @@ button:active,
   padding: 8px 16px;
 }
 
-/* Пасхалка */
+/* === Пасхалка экран === */
 #easter-screen {
   position: fixed;
   top: 0;
@@ -154,6 +175,7 @@ button:active,
   display: none;
 }
 
+/* === Текст пасхалки === */
 .easter-text {
   position: absolute;
   top: 50%;
@@ -163,7 +185,7 @@ button:active,
   font-size: 28px;
 }
 
-/* Секретная невидимая кнопка */
+/* === Секретная кнопка пасхалки === */
 #secret-btn {
   position: absolute;
   bottom: 10px;
@@ -176,7 +198,7 @@ button:active,
   z-index: 100;
 }
 
-/* Экран Кейс */
+/* === Экран открытия кейса === */
 #case-screen {
   position: fixed;
   top: 0;
@@ -190,16 +212,19 @@ button:active,
   justify-content: center;
 }
 
+/* === Заголовок кейса === */
 .case-title {
   font-size: 32px;
   margin-bottom: 20px;
 }
 
+/* === Таймер кейса === */
 #case-timer {
   font-size: 20px;
   margin-bottom: 20px;
 }
 
+/* === Кнопка открытия кейса === */
 #open-case {
   font-size: 20px;
   padding: 10px 20px;
@@ -216,12 +241,14 @@ button:active,
   cursor: default;
 }
 
+/* === Кнопка возврата из кейса === */
 #return-case {
   position: absolute;
   top: 10px;
   left: 10px;
 }
 
+/* === Область прокрутки предметов кейса === */
 #case-scroll-wrapper {
   width: 80%;
   height: 100px;
@@ -232,6 +259,7 @@ button:active,
   position: relative;
 }
 
+/* === Внутренняя лента кейса === */
 #case-scroll {
   display: flex;
   height: 100px;
@@ -239,6 +267,7 @@ button:active,
   transition: transform 5s cubic-bezier(0.15, 0.85, 0.35, 1);
 }
 
+/* === Элемент (приз) кейса === */
 .case-item {
   min-width: 100px;
   height: 100px;
@@ -252,15 +281,17 @@ button:active,
   border: 1px solid #fff;
 }
 
+/* === Область прокрутки предметов кейса === */
 #case-scroll-wrapper {
   position: relative;
 }
 
-
+/* === Область прокрутки предметов кейса === */
 #case-scroll-wrapper {
   position: relative;
 }
 
+/* === Индикатор в центре прокрутки === */
 #case-indicator {
   position: absolute;
   top: 0px;
@@ -276,6 +307,7 @@ button:active,
   transition: left 0s ease;
 }
 
+/* === Счётчик игроков онлайн === */
 #online-container {
   position: absolute;
   top: 10px;
@@ -284,4 +316,56 @@ button:active,
   font-size: 18px;
   font-weight: bold;
   z-index: 1000;
+}
+
+/* === Кнопка мультиплеера === */
+#multiplayer {
+  background-color: #333;
+  color: white;
+  width: 80%;
+  font-size: 18px;
+  padding: 10px;
+  margin-top: 5px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* === Кнопка магазина === */
+#shop {
+  background-color: #333;
+  color: white;
+  width: 80%;
+  font-size: 18px;
+  padding: 10px;
+  margin-top: 5px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* === Кнопка пасхалки === */
+#easter-egg {
+  background-color: #333;
+  color: white;
+  width: 80%;
+  font-size: 18px;
+  padding: 10px;
+  margin-top: 5px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* === Кнопка кейса === */
+#case-btn {
+  background-color: #333;
+  color: white;
+  width: 80%;
+  font-size: 18px;
+  padding: 10px;
+  margin-top: 5px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
 }
