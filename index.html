@@ -4,11 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Тетрис</title>
-  <link rel="stylesheet" href="style.css">
+  <!-- === Название вкладки браузера === -->
+  <!-- === Подключение таблицы стилей === -->
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Основное игровое окно -->
-  <div id="game">
+  
+<!-- === Игровой экран: основная сцена игры Тетрис === -->
+<div id="game">
     <h1>Тетрис</h1>
     <div id="score">Очки: 0</div>
     <canvas id="tetris" width="240" height="400"></canvas>
@@ -18,15 +21,14 @@
       <button id="right">→</button>
       <button id="down">↓</button>
     </div>
-    <div class="bottom-buttons">
       <button id="shop">Магазин</button>
       <button id="easter-egg">Пасхалка</button>
       <button id="case-btn">Кейс</button>
     </div>
   </div>
-
-  <!-- Экран Кейс -->
-  <div id="case-screen">
+  
+<!-- === Экран кейса: интерфейс открытия кейса === -->
+<div id="case-screen">
     <h1 class="case-title">Кейс</h1>
     <div id="case-timer">Доступно через: <span id="timer">00:00</span></div>
     
@@ -39,22 +41,22 @@
     <button id="return-case" class="controls-btn">←</button>
   </div>
 
-  <!-- Пасхалка -->
-  <div id="easter-screen">
+<!-- === Пасхальный экран: скрытые элементы и пасхалки === -->
+<div id="easter-screen">
     <button id="return" class="controls-btn">←</button>
     <div class="easter-text">Слинял отсюда быстро ☠️</div>
     <button id="secret-btn" aria-label="Секретная кнопка"></button>
   </div>
 
-  <!-- Магазин тем -->
-  <div id="shop-screen">
+<!-- === Экран магазина: темы и покупка за очки === -->
+<div id="shop-screen">
     <h1>Магазин</h1>
-    <button id="return-shop" class="controls-btn">←</button>
+      <button id="return-shop" class="controls-btn">←</button>
     <div id="balance">Баланс: 0</div>
     <input type="text" id="search" placeholder="Поиск темы..." />
 
     <div id="shop-items">
-      <!-- Перечень всех тем -->
+      
       <div class="shop-item">
         <div class="shop-row">
           <span>#1 Тема Мелстрой — 200 очков</span>
@@ -558,8 +560,13 @@
     </div>
   </div>
 
-  <!-- Аудио и видео темы -->
-  <audio id="mell-music" src="mellstroy.mp3" loop preload="auto"></audio>
+  <!-- === Подключение таблицы стилей === -->
+<link rel="stylesheet" href="style.css">
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
+
+<!-- === Аудиофайлы и видеоконтент тем === -->
+<audio id="mell-music" src="mellstroy.mp3" loop preload="auto"></audio>
   <video id="chipmunk-video" src="https://1darknesslegend.github.io/chipmunk/chipmunk.mp4" loop preload="auto" style="display:none"></video>
   <video id="edit-video" src="https://1darknesslegend.github.io/edit/edit.mp4" loop preload="auto" style="display:none"></video>
   <video id="glent-video" src="https://1darknesslegend.github.io/glent/glent.mp4" loop preload="auto" style="display:none"></video>
@@ -611,13 +618,10 @@
    <video id="trollfacev2-video" src="https://1darknesslegend.github.io/trollfacev2/trollfacev2.mp4" loop preload="auto" style="display:none"></video>
    <video id="endoskeleton-video" src="https://1darknesslegend.github.io/endoskeleton/endoskeleton.mp4" loop preload="auto" style="display:none"></video>
   
-  
-  <link rel="stylesheet" href="style.css">
-  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
-...
-  <div id="online-container">Онлайн: <span id="online-count">0</span></div>
+<!-- === Отображение количества игроков онлайн === -->
+<div id="online-container">Онлайн: <span id="online-count">0</span></div>
 
-  <script src="script.js"></script>
+<!-- === Основной скрипт игры === -->
+<script src="script.js"></script>
 </body>
 </html>
