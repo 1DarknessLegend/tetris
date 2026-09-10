@@ -1,275 +1,522 @@
-// === Инициализация канваса и контекста ===
+// ===================== CANVAS =====================
 const canvas = document.getElementById('tetris');
-const ctx    = canvas.getContext('2d');
-ctx.scale(20, 20);
+const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = false;
+// scale applied each frame via setTransform(20,0,0,20,0,0)
 
-// === Глобальные переменные для очков, баланса и интервалов ===
-let score        = 0;
-let balance      = 0;
+const nextCanvas = document.getElementById('next-piece');
+const nextCtx = nextCanvas ? nextCanvas.getContext('2d') : null;
+const holdCanvas = document.getElementById('hold-piece');
+const holdCtx = holdCanvas ? holdCanvas.getContext('2d') : null;
+if (nextCtx) nextCtx.imageSmoothingEnabled = false;
+if (holdCtx) holdCtx.imageSmoothingEnabled = false;
+
+// ===================== STATE =====================
+let score = 0;
+let highScore = parseInt(localStorage.getItem('tetrisHighScore') || '0', 10);
+let balance = parseInt(localStorage.getItem('tetrisBalance') || '0', 10);
+let level = 1;
+let linesCleared = 0;
 let dropInterval = 1000;
-let lastTime     = 0;
-let dropCounter  = 0;
+let lastTime = 0;
+let dropCounter = 0;
+let paused = false;
+let gameOver = false;
+let combo = 0;
+let gameMode = 'classic'; // classic | sprint | zen
+let sprintTarget = 40;
+let sprintStart = 0;
+let sprintElapsed = 0;
+let holdMatrix = null;
+let holdLocked = false;
+let particles = [];
+let shakeTime = 0;
+let softDropping = false;
 
-// === Список всех тем и их состояния ===
+// ===================== THEMES =====================
 const themes = [
   'theme','chipmunk','glent','billy','pidors','bosinn','billyv2','edit',
   'gigachad','maga','sneakedup','goblingang','sexibetmen','sigma',
-  'ricardomillos','trollface','kobyakov','chipichapa','whatsapp','rickroll','billyv3',"repo",'dance','dante','josh','repov2','tvorog','chicken','billyv4','music','crocodile','dantev2','rooster','goose','musicv2','romapro','creeper','roosterv2','toilet','ratdance','kingvon','musicv3','breto','roosterv3','mactraher','legday','laser','dragon','trollfacev2','endoskeleton'
+  'ricardomillos','trollface','kobyakov','chipichapa','whatsapp','rickroll','billyv3','repo','dance','dante','josh','repov2','tvorog','chicken','billyv4','music','crocodile','dantev2','rooster','goose','musicv2','romapro','creeper','roosterv2','toilet','ratdance','kingvon','musicv3','breto','roosterv3','mactraher','legday','laser','dragon','trollfacev2','endoskeleton'
 ];
 const bought = {};
 const active = {};
+const savedBought = JSON.parse(localStorage.getItem('tetrisBought') || '{}');
+themes.forEach(t => { bought[t] = !!savedBought[t]; active[t] = false; });
 
-// === Кнопки ВКЛ/ВЫКЛ тем ===
-themes.forEach(t => { bought[t] = false; active[t] = false; });
+// ===================== ACHIEVEMENTS =====================
+const ACHIEVEMENTS = [
+  { id: 'first_line', name: 'Первая линия', desc: 'Очисти 1 линию', check: s => s.totalLines >= 1 },
+  { id: 'lines_40', name: 'Спринтер', desc: 'Очисти 40 линий за всё время', check: s => s.totalLines >= 40 },
+  { id: 'lines_200', name: 'Марафонец', desc: 'Очисти 200 линий', check: s => s.totalLines >= 200 },
+  { id: 'score_5k', name: '5K', desc: 'Набери 5000 очков за игру', check: s => s.bestScore >= 5000 },
+  { id: 'score_20k', name: '20K', desc: 'Набери 20000 очков за игру', check: s => s.bestScore >= 20000 },
+  { id: 'tetris', name: 'Тетрис!', desc: 'Очисти 4 линии сразу', check: s => s.tetrises >= 1 },
+  { id: 'combo3', name: 'Комбо x3', desc: 'Сделай комбо x3', check: s => s.maxCombo >= 3 },
+  { id: 'combo5', name: 'Комбо x5', desc: 'Сделай комбо x5', check: s => s.maxCombo >= 5 },
+  { id: 'level10', name: 'Уровень 10', desc: 'Достигни 10 уровня', check: s => s.maxLevel >= 10 },
+  { id: 'sprint_finish', name: 'Спринт пройден', desc: 'Пройди спринт 40L', check: s => s.sprints >= 1 },
+  { id: 'buyer', name: 'Шопоголик', desc: 'Купи 3 темы', check: s => s.themesBought >= 3 },
+  { id: 'collector', name: 'Коллекционер', desc: 'Купи 10 тем', check: s => s.themesBought >= 10 },
+  { id: 'case_open', name: 'Удача', desc: 'Открой кейс', check: s => s.casesOpened >= 1 },
+];
 
-// === Получение DOM-элементов интерфейса ===
-const scoreEl   = document.getElementById('score');
-const balanceEl = document.getElementById('balance');
-const gameDiv   = document.getElementById('game');
-const shopDiv   = document.getElementById('shop-screen');
-const easterDiv = document.getElementById('easter-screen');
+let stats = JSON.parse(localStorage.getItem('tetrisStats') || '{}');
+stats = Object.assign({
+  totalLines: 0, bestScore: 0, tetrises: 0, maxCombo: 0,
+  maxLevel: 1, sprints: 0, themesBought: 0, casesOpened: 0,
+  unlocked: {}
+}, stats);
 
-const searchInput = document.getElementById('search');
-const shopItems   = document.querySelectorAll('.shop-item');
+function saveStats() {
+  localStorage.setItem('tetrisStats', JSON.stringify(stats));
+}
 
-// === Поиск по темам в магазине ===
-searchInput.style.width = '100%';
-searchInput.addEventListener('input', function() {
-  const q = this.value.toLowerCase();
-  shopItems.forEach(item => {
-    item.style.display = item.innerText.toLowerCase().includes(q) ? '' : 'none';
+function checkAchievements() {
+  let newOnes = [];
+  ACHIEVEMENTS.forEach(a => {
+    if (!stats.unlocked[a.id] && a.check(stats)) {
+      stats.unlocked[a.id] = Date.now();
+      newOnes.push(a);
+    }
   });
-});
+  if (newOnes.length) {
+    saveStats();
+    newOnes.forEach(a => toast('🏆 ' + a.name));
+  }
+}
 
-// === Загрузка музыки и видео по темам ===
+function renderAchievements() {
+  const list = document.getElementById('achievements-list');
+  if (!list) return;
+  list.innerHTML = ACHIEVEMENTS.map(a => {
+    const done = !!stats.unlocked[a.id];
+    return `<div class="list-item ${done ? 'done' : ''}">
+      <div class="li-icon">${done ? '✅' : '🔒'}</div>
+      <div class="li-body"><div class="li-name">${a.name}</div><div class="li-desc">${a.desc}</div></div>
+    </div>`;
+  }).join('');
+}
+
+// ===================== DAILY QUESTS =====================
+function todayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+}
+
+const QUEST_POOL = [
+  { id: 'q_lines10', name: 'Очисти 10 линий', target: 10, reward: 'lines', reward: 300 },
+  { id: 'q_lines25', name: 'Очисти 25 линий', target: 25, key: 'lines', reward: 600 },
+  { id: 'q_score2k', name: 'Набери 2000 очков', target: 2000, key: 'score', reward: 400 },
+  { id: 'q_tetris', name: 'Сделай 1 тетрис', target: 1, key: 'tetris', reward: 500 },
+  { id: 'q_combo', name: 'Комбо x3', target: 3, key: 'combo', reward: 450 },
+  { id: 'q_play', name: 'Сыграй 3 партии', target: 3, key: 'games', reward: 350 },
+];
+
+let quests = JSON.parse(localStorage.getItem('tetrisQuests') || 'null');
+if (!quests || quests.date !== todayKey()) {
+  // pick 3 random
+  const shuffled = QUEST_POOL.slice().sort(() => Math.random() - 0.5).slice(0, 3);
+  quests = {
+    date: todayKey(),
+    items: shuffled.map(q => ({ ...q, progress: 0, claimed: false }))
+  };
+  localStorage.setItem('tetrisQuests', JSON.stringify(quests));
+}
+
+function questProgress(key, amount) {
+  let changed = false;
+  quests.items.forEach(q => {
+    if (q.claimed) return;
+    if (q.key === key) {
+      q.progress = Math.min(q.target, q.progress + amount);
+      changed = true;
+      if (q.progress >= q.target && !q.claimed) {
+        // auto-ready
+      }
+    }
+  });
+  if (changed) localStorage.setItem('tetrisQuests', JSON.stringify(quests));
+}
+
+function renderQuests() {
+  const list = document.getElementById('quests-list');
+  const dateEl = document.getElementById('quests-date');
+  if (dateEl) dateEl.textContent = 'Сегодня · ' + quests.date;
+  if (!list) return;
+  list.innerHTML = quests.items.map((q, i) => {
+    const ready = q.progress >= q.target;
+    const pct = Math.min(100, Math.floor(q.progress / q.target * 100));
+    return `<div class="list-item ${q.claimed ? 'done' : ready ? 'ready' : ''}">
+      <div class="li-body" style="flex:1">
+        <div class="li-name">${q.name}</div>
+        <div class="li-desc">${q.progress}/${q.target} · 💎 ${q.reward}</div>
+        <div class="quest-bar"><div class="quest-fill" style="width:${pct}%"></div></div>
+      </div>
+      <button class="quest-claim" data-qi="${i}" ${(!ready || q.claimed) ? 'disabled' : ''}>${q.claimed ? '✓' : 'Забрать'}</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.quest-claim').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.qi;
+      const q = quests.items[i];
+      if (q.claimed || q.progress < q.target) return;
+      q.claimed = true;
+      balance += q.reward;
+      updateBalance();
+      localStorage.setItem('tetrisQuests', JSON.stringify(quests));
+      toast('💎 +' + q.reward);
+      renderQuests();
+      sfx('coin');
+    });
+  });
+}
+
+// ===================== SFX (Web Audio) =====================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function sfx(type) {
+  ensureAudio();
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.connect(g); g.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  if (type === 'move') {
+    o.frequency.value = 180; g.gain.value = 0.03;
+    o.type = 'square'; o.start(now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.05); o.stop(now + 0.05);
+  } else if (type === 'rotate') {
+    o.frequency.value = 320; g.gain.value = 0.04;
+    o.type = 'square'; o.start(now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.06); o.stop(now + 0.06);
+  } else if (type === 'drop') {
+    o.frequency.value = 120; g.gain.value = 0.05;
+    o.type = 'triangle'; o.start(now); o.frequency.exponentialRampToValueAtTime(60, now + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.12); o.stop(now + 0.12);
+  } else if (type === 'line') {
+    o.frequency.value = 440; g.gain.value = 0.06;
+    o.type = 'square'; o.start(now); o.frequency.exponentialRampToValueAtTime(880, now + 0.15);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.2); o.stop(now + 0.2);
+  } else if (type === 'tetris') {
+    o.frequency.value = 523; g.gain.value = 0.08;
+    o.type = 'sawtooth'; o.start(now); o.frequency.exponentialRampToValueAtTime(1046, now + 0.25);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.3); o.stop(now + 0.3);
+  } else if (type === 'hold') {
+    o.frequency.value = 260; g.gain.value = 0.04;
+    o.type = 'sine'; o.start(now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.08); o.stop(now + 0.08);
+  } else if (type === 'gameover') {
+    o.frequency.value = 200; g.gain.value = 0.08;
+    o.type = 'sawtooth'; o.start(now); o.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.55); o.stop(now + 0.55);
+  } else if (type === 'coin') {
+    o.frequency.value = 800; g.gain.value = 0.05;
+    o.type = 'sine'; o.start(now); o.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.15); o.stop(now + 0.15);
+  } else if (type === 'level') {
+    o.frequency.value = 400; g.gain.value = 0.05;
+    o.type = 'square'; o.start(now); o.frequency.setValueAtTime(600, now + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.2); o.stop(now + 0.2);
+  }
+}
+
+function vibrate(ms) {
+  try { if (navigator.vibrate) navigator.vibrate(ms); } catch(e) {}
+}
+
+// ===================== TOAST =====================
+function toast(msg) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ===================== DOM =====================
+const gameDiv = document.getElementById('game');
+const shopDiv = document.getElementById('shop-screen');
+const easterDiv = document.getElementById('easter-screen');
+const modeScreen = document.getElementById('mode-screen');
+const goScreen = document.getElementById('gameover-screen');
+const searchInput = document.getElementById('search');
+const shopItems = document.querySelectorAll('.shop-item');
+
+if (searchInput) {
+  searchInput.addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    shopItems.forEach(item => {
+      item.style.display = item.innerText.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+}
+
 const mellMusic = document.getElementById('mell-music');
 const vids = {};
 themes.slice(1).forEach(t => {
   const el = document.getElementById(`${t}-video`);
-  if (el) { vids[t] = el; el.load(); }
+  if (el) {
+    vids[t] = el;
+    // lazy: don't load until bought/activated
+    el.preload = 'none';
+  }
 });
 
-// === Фоновое изображение для стандартной темы ===
 const mellBG = new Image();
 mellBG.src = 'https://avatars.mds.yandex.net/i?id=f929b30edd21b71bed35148895c13bd3_l-4531164-images-thumbs&n=13';
 
-// === Функции обновления очков и баланса ===
-function updateScore()   { scoreEl.textContent   = 'Очки: ' + score; }
+function updateScore() {
+  const sv = document.getElementById('score-val');
+  const hv = document.getElementById('high-val');
+  const lv = document.getElementById('level-val');
+  const ln = document.getElementById('lines-val');
+  const cv = document.getElementById('combo-val');
+  const cc = document.getElementById('combo-card');
+  if (sv) sv.textContent = score;
+  if (hv) hv.textContent = highScore;
+  if (lv) lv.textContent = level;
+  if (ln) ln.textContent = linesCleared;
+  if (cv) cv.textContent = 'x' + combo;
+  if (cc) cc.style.display = combo > 1 ? '' : 'none';
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem('tetrisHighScore', highScore);
+    if (hv) hv.textContent = highScore;
+  }
+}
 
-function updateBalance() { balanceEl.textContent = 'Баланс: ' + balance; }
+function updateBalance() {
+  const bn = document.getElementById('balance-num');
+  if (bn) bn.textContent = balance;
+  localStorage.setItem('tetrisBalance', balance);
+}
 
-// === Покупка тем с симуляцией загрузки ===
+function saveBought() {
+  localStorage.setItem('tetrisBought', JSON.stringify(bought));
+}
+
+// ===================== SHOP BUY =====================
 themes.forEach(function(t) {
-  var buyBtn = document.getElementById("buy-" + t);
-  var actionsDiv = document.getElementById(t + "-actions");
+  var buyBtn = document.getElementById('buy-' + t);
+  var actionsDiv = document.getElementById(t + '-actions');
   if (!buyBtn || !actionsDiv) return;
-
-  buyBtn.addEventListener("click", async function() {
-    
+  if (bought[t]) {
+    buyBtn.style.display = 'none';
+    actionsDiv.style.display = 'flex';
+  }
+  buyBtn.addEventListener('click', async function() {
     if (!bought[t] && balance >= 200) {
-      
       balance -= 200;
       bought[t] = true;
       updateBalance();
-
+      saveBought();
+      stats.themesBought = Object.values(bought).filter(Boolean).length;
+      saveStats();
+      checkAchievements();
       buyBtn.disabled = true;
-      buyBtn.textContent = "Загрузка: 0%";
-
-      var mediaUrl;
-      if (t === "theme") {
-        mediaUrl = mellMusic.src;
-      } else {
-        var videoElem = document.getElementById(t + "-video");
-        mediaUrl = videoElem ? videoElem.src : "";
-      }
-
+      buyBtn.textContent = 'Загрузка...';
       try {
-        var response = await fetch(mediaUrl);
-        var total = parseInt(response.headers.get("Content-Length") || "0", 10);
-        var reader = response.body.getReader();
-        var received = 0;
-        var chunks = [];
-
-        while (true) {
-          var result = await reader.read();
-          if (result.done) break;
-          chunks.push(result.value);
-          received += result.value.length;
-          var percent = total ? Math.floor((received / total) * 100) : 0;
-          buyBtn.textContent = "Загрузка: " + percent + "%";
+        var videoElem = document.getElementById(t + '-video');
+        if (t === 'theme' && mellMusic) {
+          // already local
+        } else if (videoElem && videoElem.preload === 'none') {
+          videoElem.preload = 'auto';
+          videoElem.load();
         }
-
-        var blob = new Blob(chunks);
-        var objectUrl = URL.createObjectURL(blob);
-        if (t === "theme") {
-          mellMusic.src = objectUrl;
-        } else {
-          var video = document.getElementById(t + "-video");
-          if (video) video.src = objectUrl;
-        }
-
-        buyBtn.style.display = "none";
-        actionsDiv.style.display = "flex";
-
+        buyBtn.style.display = 'none';
+        actionsDiv.style.display = 'flex';
+        toast('Тема куплена!');
+        sfx('coin');
       } catch (err) {
-        console.error(err);
-        
-        balance += 200;
-        bought[t] = false;
-        updateBalance();
-        
-        buyBtn.disabled = false;
-        buyBtn.textContent = "Ошибка загрузки";
+        buyBtn.style.display = 'none';
+        actionsDiv.style.display = 'flex';
       }
-
     } else if (!bought[t]) {
-      
-      alert("Недостаточно очков для покупки темы " + t);
+      alert('Недостаточно очков');
     }
   });
 });
 
-// === Кнопки ВКЛ/ВЫКЛ тем ===
 themes.forEach(t => {
-  const applyBtn  = document.getElementById(`apply-${t}`);
-  const removeBtn = document.getElementById(`remove-${t}`);
+  const applyBtn = document.getElementById('apply-' + t);
+  const removeBtn = document.getElementById('remove-' + t);
   if (applyBtn) {
     applyBtn.addEventListener('click', () => {
       themes.forEach(x => active[x] = false);
       active[t] = true;
-      mellMusic.pause(); mellMusic.currentTime = 0;
+      if (mellMusic) { mellMusic.pause(); mellMusic.currentTime = 0; }
       Object.values(vids).forEach(v => { v.pause(); v.currentTime = 0; });
-      if (t === 'theme') mellMusic.play().catch(() => {});
-      else if (vids[t]) vids[t].play().catch(() => {});
+      if (t === 'theme' && mellMusic) mellMusic.play().catch(() => {});
+      else if (vids[t]) {
+        if (vids[t].preload === 'none') { vids[t].preload = 'auto'; vids[t].load(); }
+        vids[t].play().catch(() => {});
+      }
     });
   }
   if (removeBtn) {
     removeBtn.addEventListener('click', () => {
       active[t] = false;
-      if (t === 'theme') { mellMusic.pause(); mellMusic.currentTime = 0; }
+      if (t === 'theme' && mellMusic) { mellMusic.pause(); mellMusic.currentTime = 0; }
       else if (vids[t]) { vids[t].pause(); vids[t].currentTime = 0; }
     });
   }
 });
 
-// === Переходы между экранами (магазин, игра, пасхалка) ===
-document.getElementById('shop').addEventListener('click', () => {
-  shopDiv.style.display = 'flex';
-  gameDiv.style.display = 'none';
+// ===================== SCREENS =====================
+function showScreen(el) {
+  document.querySelectorAll('.screen').forEach(s => {
+    s.style.display = 'none';
+    s.classList.remove('active-screen');
+  });
+  if (!el) return;
+  el.style.display = 'flex';
+  el.classList.add('active-screen');
+}
+
+document.getElementById('shop')?.addEventListener('click', () => {
+  showScreen(shopDiv);
+  paused = true;
 });
-document.getElementById('return-shop').addEventListener('click', () => {
-  shopDiv.style.display = 'none';
-  gameDiv.style.display = 'block';
+document.getElementById('return-shop')?.addEventListener('click', () => {
+  showScreen(gameDiv);
+  paused = false;
+});
+document.getElementById('easter-egg')?.addEventListener('click', () => {
+  showScreen(easterDiv);
+  paused = true;
+});
+document.getElementById('return')?.addEventListener('click', () => {
+  showScreen(gameDiv);
+  paused = false;
+});
+document.getElementById('menu-btn')?.addEventListener('click', () => {
+  paused = true;
+  showScreen(modeScreen);
 });
 
-document.getElementById('easter-egg').addEventListener('click', () => {
-  easterDiv.style.display = 'block';
-  gameDiv.style.display   = 'none';
-});
-document.getElementById('return').addEventListener('click', () => {
-  easterDiv.style.display = 'none';
-  gameDiv.style.display   = 'block';
+// Mode select
+document.querySelectorAll('.mode-card').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    gameMode = btn.getAttribute('data-mode') || 'classic';
+    ensureAudio();
+    startGame();
+    showScreen(gameDiv);
+    // reset timing so first drop isn't instant
+    lastTime = performance.now();
+    dropCounter = 0;
+  });
 });
 
-// === Пасхальное меню ===
+document.getElementById('open-achievements')?.addEventListener('click', () => {
+  renderAchievements();
+  showScreen(document.getElementById('achievements-screen'));
+});
+document.getElementById('ach-back')?.addEventListener('click', () => showScreen(modeScreen));
+document.getElementById('open-quests')?.addEventListener('click', () => {
+  renderQuests();
+  showScreen(document.getElementById('quests-screen'));
+});
+document.getElementById('quests-back')?.addEventListener('click', () => showScreen(modeScreen));
+
+// Easter secret
 const secretBtn = document.getElementById('secret-btn');
-const secretMenu = document.createElement('div');
-secretMenu.id = 'secret-menu';
-Object.assign(secretMenu.style, {
-  position: 'fixed',
-  top: 0, left: 0,
-  width: '100%', height: '100vh',
-  background: 'rgba(0,0,0,0.9)',
-  display: 'none',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000
-});
-const secretImg = document.createElement('img');
-secretImg.src = 'secret.png';
-secretImg.style.maxWidth = '80%';
-secretImg.style.maxHeight = '80%';
-const closeSecret = document.createElement('button');
-closeSecret.textContent = 'Закрыть';
-Object.assign(closeSecret.style, {
-  marginTop: '20px',
-  padding: '10px 20px',
-  fontSize: '18px',
-  borderRadius: '8px',
-  border: 'none',
-  cursor: 'pointer'
-});
-secretMenu.append(secretImg, closeSecret);
-document.body.appendChild(secretMenu);
-secretBtn.addEventListener('click', () => {
-  secretMenu.style.display = 'flex';
-});
-closeSecret.addEventListener('click', () => {
-  secretMenu.style.display = 'none';
-});
+if (secretBtn) {
+  const secretMenu = document.createElement('div');
+  secretMenu.id = 'secret-menu';
+  Object.assign(secretMenu.style, {
+    position: 'fixed', top: 0, left: 0, width: '100%', height: '100vh',
+    background: 'rgba(0,0,0,0.92)', display: 'none', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center', zIndex: 1000
+  });
+  const secretImg = document.createElement('img');
+  secretImg.src = 'secret.png';
+  secretImg.style.maxWidth = '80%';
+  secretImg.style.maxHeight = '80%';
+  const closeSecret = document.createElement('button');
+  closeSecret.textContent = 'Закрыть';
+  closeSecret.className = 'primary-btn';
+  closeSecret.style.marginTop = '20px';
+  secretMenu.append(secretImg, closeSecret);
+  document.body.appendChild(secretMenu);
+  secretBtn.addEventListener('click', () => { secretMenu.style.display = 'flex'; });
+  closeSecret.addEventListener('click', () => { secretMenu.style.display = 'none'; });
+}
 
-// === Интерфейс открытия кейса ===
-const caseBtn       = document.getElementById('case-btn');
-const caseScreen    = document.getElementById('case-screen');
+// ===================== CASE =====================
+const caseBtn = document.getElementById('case-btn');
+const caseScreen = document.getElementById('case-screen');
 const returnCaseBtn = document.getElementById('return-case');
-const timerEl       = document.getElementById('timer');
-const openCaseBtn   = document.getElementById('open-case');
-let caseAvailableAt = Date.now() + 5 * 60 * 1000;
-const rewards       = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000]
+const timerEl = document.getElementById('timer');
+const openCaseBtn = document.getElementById('open-case');
+let caseAvailableAt = parseInt(localStorage.getItem('tetrisCaseAt') || '0', 10) || (Date.now() + 5 * 60 * 1000);
+const rewards = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000];
 
-caseBtn.addEventListener('click', () => {
+caseBtn?.addEventListener('click', () => {
   updateCaseTimer();
-  caseScreen.style.display = 'flex';
-  gameDiv.style.display    = 'none';
+  showScreen(caseScreen);
+  paused = true;
 });
-returnCaseBtn.addEventListener('click', () => {
-  caseScreen.style.display = 'none';
-  gameDiv.style.display    = 'block';
+returnCaseBtn?.addEventListener('click', () => {
+  showScreen(gameDiv);
+  paused = false;
 });
 
-// === Таймер до следующего кейса ===
 function updateCaseTimer() {
   const diff = caseAvailableAt - Date.now();
   if (diff <= 0) {
-    timerEl.textContent    = '00:00';
-    openCaseBtn.disabled   = false;
+    if (timerEl) timerEl.textContent = '00:00';
+    if (openCaseBtn) openCaseBtn.disabled = false;
   } else {
-    const sec = Math.floor(diff/1000) % 60;
-    const min = Math.floor(diff/60000);
-    timerEl.textContent    = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
-    openCaseBtn.disabled   = true;
+    const sec = Math.floor(diff / 1000) % 60;
+    const min = Math.floor(diff / 60000);
+    if (timerEl) timerEl.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    if (openCaseBtn) openCaseBtn.disabled = true;
     setTimeout(updateCaseTimer, 1000);
   }
 }
 
-openCaseBtn.addEventListener('click', () => {
+openCaseBtn?.addEventListener('click', () => {
   const scroll = document.getElementById('case-scroll');
-  const indicator = document.getElementById('case-indicator');
+  if (!scroll) return;
   scroll.innerHTML = '';
-  indicator.style.left = '50%';
-
   scroll.style.transition = 'none';
   scroll.style.transform = 'translateX(0)';
+
+  // 10% chance theme reward slot
+  const freeThemes = themes.filter(t => t !== 'theme' && !bought[t]);
+  const giveTheme = freeThemes.length && Math.random() < 0.12;
 
   setTimeout(() => {
     const pool = [];
     for (let i = 0; i < 50; i++) {
-      const value = rewards[Math.floor(Math.random() * rewards.length)];
       const div = document.createElement('div');
       div.className = 'case-item';
-      div.textContent = value + ' очков';
-      pool.push(value);
+      if (giveTheme && i === 25) {
+        div.textContent = '🎨 Тема!';
+        div.dataset.theme = freeThemes[Math.floor(Math.random() * freeThemes.length)];
+        pool.push('theme:' + div.dataset.theme);
+      } else {
+        const value = rewards[Math.floor(Math.random() * rewards.length)];
+        div.textContent = value + ' очков';
+        pool.push(value);
+      }
       scroll.appendChild(div);
     }
-
-    const stopIndex = 20 + Math.floor(Math.random() * 10);
+    const stopIndex = giveTheme ? 25 : (20 + Math.floor(Math.random() * 10));
     const scrollWrapper = document.getElementById('case-scroll-wrapper');
     const itemWidth = 110;
-    const wrapperWidth = scrollWrapper.offsetWidth;
+    const wrapperWidth = scrollWrapper ? scrollWrapper.offsetWidth : 300;
     const centerOffset = (stopIndex * itemWidth) - (wrapperWidth / 2) + (itemWidth / 2);
-
     scroll.style.transition = 'transform 5s cubic-bezier(0.15, 0.85, 0.35, 1)';
     scroll.style.transform = `translateX(${-centerOffset}px)`;
     openCaseBtn.disabled = true;
@@ -277,46 +524,61 @@ openCaseBtn.addEventListener('click', () => {
     const reward = pool[stopIndex];
     const handleTransitionEnd = () => {
       scroll.removeEventListener('transitionend', handleTransitionEnd);
-      score += reward;
-      balance += reward;
-      updateScore();
-      updateBalance();
+      if (typeof reward === 'string' && reward.startsWith('theme:')) {
+        const tid = reward.slice(6);
+        bought[tid] = true;
+        saveBought();
+        stats.themesBought = Object.values(bought).filter(Boolean).length;
+        const buyBtn = document.getElementById('buy-' + tid);
+        const actionsDiv = document.getElementById(tid + '-actions');
+        if (buyBtn) buyBtn.style.display = 'none';
+        if (actionsDiv) actionsDiv.style.display = 'flex';
+        toast('🎨 Выпала тема: ' + tid);
+        sfx('coin');
+      } else {
+        score += reward;
+        balance += reward;
+        updateScore();
+        updateBalance();
+        toast('+' + reward + ' очков!');
+        sfx('coin');
+      }
+      stats.casesOpened = (stats.casesOpened || 0) + 1;
+      saveStats();
+      checkAchievements();
       caseAvailableAt = Date.now() + 5 * 60 * 1000;
+      localStorage.setItem('tetrisCaseAt', caseAvailableAt);
       updateCaseTimer();
-      alert(`Вы получили ${reward} очков!`);
     };
-
     scroll.addEventListener('transitionend', handleTransitionEnd);
   }, 50);
 });
 
-// === Игровая логика: арена, игрок, фигуры ===
+// ===================== GAME LOGIC =====================
 function createMatrix(w, h) {
-  const matrix = [];
-  while (h--) matrix.push(new Array(w).fill(0));
-  return matrix;
+  const m = [];
+  while (h--) m.push(new Array(w).fill(0));
+  return m;
 }
-const arena = createMatrix(12, 20);
-const player = { pos:{x:0,y:0}, matrix: null };
 
-// --- Проверка столкновений ---
-function collide(arena, player) {
-  const [m, o] = [player.matrix, player.pos];
-  return m.some((row,y) =>
-    row.some((val,x) => {
+const arena = createMatrix(12, 20);
+const player = { pos: { x: 0, y: 0 }, matrix: null, next: null };
+
+const colors = [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'];
+
+function collide(arena, p) {
+  const [m, o] = [p.matrix, p.pos];
+  return m.some((row, y) =>
+    row.some((val, x) => {
       if (!val) return false;
-      const dy = y + o.y;
-      const dx = x + o.x;
-      return dy < 0 || dy >= arena.length ||
-             dx < 0 || dx >= arena[0].length ||
-             arena[dy][dx] !== 0;
+      const dy = y + o.y, dx = x + o.x;
+      return dy < 0 || dy >= arena.length || dx < 0 || dx >= arena[0].length || arena[dy][dx] !== 0;
     })
   );
 }
 
-// --- Создание фигур ---
 function createPiece(type) {
-  switch(type) {
+  switch (type) {
     case 'T': return [[0,0,0],[1,1,1],[0,1,0]];
     case 'O': return [[2,2],[2,2]];
     case 'L': return [[0,3,0],[0,3,0],[0,3,3]];
@@ -327,197 +589,538 @@ function createPiece(type) {
   }
 }
 
-// --- Поворот фигуры ---
 function rotate(matrix, dir) {
-  for (let y=0; y<matrix.length; ++y) {
-    for (let x=0; x<y; ++x) {
+  for (let y = 0; y < matrix.length; ++y)
+    for (let x = 0; x < y; ++x)
       [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
-    }
-  }
-  dir > 0 ? matrix.forEach(r => r.reverse()) : matrix.reverse();
+  if (dir > 0) matrix.forEach(r => r.reverse());
+  else matrix.reverse();
 }
 
-// --- Цвета фигур ---
-const colors = [ null,'#FF0D72','#0DC2FF','#0DFF72','#F538FF','#FF8E0D','#FFE138','#3877FF' ];
-
-// --- Отрисовка фигур ---
-function drawMatrix(matrix, offset) {
-  matrix.forEach((row,y) =>
-    row.forEach((val,x) => {
+function drawMatrix(matrix, offset, alpha = 1) {
+  matrix.forEach((row, y) =>
+    row.forEach((val, x) => {
       if (val) {
-        const dy = y + offset.y;
-        const dx = x + offset.x;
+        const dy = y + offset.y, dx = x + offset.x;
         if (dy >= 0 && dy < arena.length && dx >= 0 && dx < arena[0].length) {
+          ctx.globalAlpha = alpha;
           ctx.fillStyle = colors[val];
           ctx.fillRect(dx, dy, 1, 1);
+          ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+          ctx.lineWidth = 0.05;
+          ctx.strokeRect(dx, dy, 1, 1);
+          ctx.globalAlpha = 1;
         }
       }
     })
   );
 }
 
-// --- Основной рендеринг игры ---
+function getGhostY() {
+  if (!player.matrix) return 0;
+  const ghost = { pos: { x: player.pos.x, y: player.pos.y }, matrix: player.matrix };
+  let guard = 0;
+  while (!collide(arena, ghost) && guard++ < 30) ghost.pos.y++;
+  ghost.pos.y--;
+  return ghost.pos.y;
+}
+
+function drawMini(targetCtx, targetCanvas, matrix) {
+  if (!targetCtx || !matrix) {
+    if (targetCtx && targetCanvas) {
+      targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      targetCtx.fillStyle = '#0a0a14';
+      targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+    }
+    return;
+  }
+  targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+  targetCtx.fillStyle = '#0a0a14';
+  targetCtx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  const cell = 14;
+  const mw = matrix[0].length * cell;
+  const mh = matrix.length * cell;
+  const ox = (targetCanvas.width - mw) / 2;
+  const oy = (targetCanvas.height - mh) / 2;
+  matrix.forEach((row, y) => row.forEach((val, x) => {
+    if (val) {
+      targetCtx.fillStyle = colors[val];
+      targetCtx.fillRect(ox + x * cell, oy + y * cell, cell - 1, cell - 1);
+    }
+  }));
+}
+
+function drawNextPiece() { drawMini(nextCtx, nextCanvas, player.next); }
+function drawHoldPiece() { drawMini(holdCtx, holdCanvas, holdMatrix); }
+
+function spawnParticles(rowY, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: Math.random() * 12,
+      y: rowY + Math.random(),
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: -Math.random() * 0.25 - 0.05,
+      life: 1,
+      color: colors[1 + (Math.random() * 7 | 0)]
+    });
+  }
+}
+
+function updateParticles(dt) {
+  particles = particles.filter(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.01;
+    p.life -= dt / 500;
+    return p.life > 0;
+  });
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, 0.25, 0.25);
+  });
+  ctx.globalAlpha = 1;
+}
+
 function draw() {
-  if (active.theme && mellBG.complete) {
-    ctx.save(); ctx.setTransform(1,0,0,1,0,0);
-    ctx.drawImage(mellBG, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  } else {
-    for (const t of themes.slice(1)) {
-      if (active[t] && vids[t]?.readyState >= 2) {
-        ctx.save(); ctx.setTransform(1,0,0,1,0,0);
-        ctx.drawImage(vids[t], 0, 0, canvas.width, canvas.height);
-        ctx.restore();
-        break;
+  // Always reset transform to block scale (fixes invisible pieces)
+  ctx.setTransform(20, 0, 0, 20, 0, 0);
+
+  // shake
+  const boardWrap = document.getElementById('board-wrap');
+  if (shakeTime > 0 && boardWrap) {
+    const s = Math.min(shakeTime, 200) / 100;
+    boardWrap.style.transform = `translate(${(Math.random()-0.5)*s*4}px, ${(Math.random()-0.5)*s*4}px)`;
+  } else if (boardWrap) {
+    boardWrap.style.transform = '';
+  }
+
+  // Background in pixel space
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  let bgDrawn = false;
+  try {
+    if (active.theme && mellBG.complete && mellBG.naturalWidth) {
+      ctx.drawImage(mellBG, 0, 0, canvas.width, canvas.height);
+      bgDrawn = true;
+    } else {
+      for (const t of themes.slice(1)) {
+        if (active[t] && vids[t] && vids[t].readyState >= 2) {
+          ctx.drawImage(vids[t], 0, 0, canvas.width, canvas.height);
+          bgDrawn = true;
+          break;
+        }
       }
     }
-  }
-  if (!Object.values(active).some(v => v)) {
-    ctx.fillStyle = '#000';
+  } catch (e) { /* ignore media draw errors */ }
+  if (!bgDrawn) {
+    ctx.fillStyle = '#0c0c18';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
-  drawMatrix(arena, { x:0, y:0 });
-  drawMatrix(player.matrix, player.pos);
-}
 
-// --- Очистка заполненных линий ---
-function arenaSweep() {
-  let rowCount = 1;
-  outer: for (let y=arena.length-1; y>=0; --y) {
-    if (arena[y].every(v => v !== 0)) {
-      const row = arena.splice(y,1)[0].fill(0);
-      arena.unshift(row);
-      score   += rowCount * 200;
-      balance += rowCount * 200;
-      rowCount *= 2;
-      if (dropInterval > 200) dropInterval -= 50;
-      updateScore();
-      updateBalance();
-      y++;
-    }
+  // Back to block coordinates
+  ctx.setTransform(20, 0, 0, 20, 0, 0);
+
+  // grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 0.03;
+  for (let x = 0; x <= 12; x++) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 20); ctx.stroke(); }
+  for (let y = 0; y <= 20; y++) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(12, y); ctx.stroke(); }
+
+  drawMatrix(arena, { x: 0, y: 0 });
+  if (player.matrix && !gameOver) {
+    const gy = getGhostY();
+    if (gy >= 0) drawMatrix(player.matrix, { x: player.pos.x, y: gy }, 0.25);
+  }
+  if (player.matrix) drawMatrix(player.matrix, player.pos);
+  drawParticles();
+  drawNextPiece();
+  drawHoldPiece();
+
+  if (paused && !gameOver) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ПАУЗА', canvas.width / 2, canvas.height / 2);
+    ctx.setTransform(20, 0, 0, 20, 0, 0);
   }
 }
 
-// --- Слияние фигуры с ареной ---
+function arenaSweep() {
+  let rowCount = 0;
+  const clearedYs = [];
+  outer: for (let y = arena.length - 1; y >= 0; --y) {
+    for (let x = 0; x < arena[y].length; ++x) {
+      if (arena[y][x] === 0) continue outer;
+    }
+    clearedYs.push(y);
+    const row = arena.splice(y, 1)[0].fill(0);
+    arena.unshift(row);
+    rowCount++;
+    y++;
+  }
+
+  if (rowCount > 0) {
+    combo++;
+    if (combo > stats.maxCombo) { stats.maxCombo = combo; saveStats(); }
+    const pointsTable = [0, 100, 300, 500, 800];
+    let gained = (pointsTable[rowCount] || 800) * level;
+    if (combo > 1) gained += 50 * combo * level;
+    score += gained;
+    balance += gained;
+    linesCleared += rowCount;
+    stats.totalLines += rowCount;
+    questProgress('lines', rowCount);
+    questProgress('score', gained);
+    if (combo >= 3) questProgress('combo', combo);
+
+    clearedYs.forEach(y => spawnParticles(y, 18));
+    if (rowCount >= 4) {
+      stats.tetrises = (stats.tetrises || 0) + 1;
+      questProgress('tetris', 1);
+      shakeTime = 250;
+      sfx('tetris');
+      vibrate(40);
+      toast('TETRIS! +' + gained);
+    } else {
+      sfx('line');
+      vibrate(15);
+    }
+
+    if (gameMode !== 'zen') {
+      const newLevel = Math.floor(linesCleared / 10) + 1;
+      if (newLevel > level) {
+        level = newLevel;
+        dropInterval = Math.max(80, 1000 - (level - 1) * 70);
+        if (level > stats.maxLevel) { stats.maxLevel = level; saveStats(); }
+        sfx('level');
+        toast('Уровень ' + level);
+      }
+    }
+
+    if (gameMode === 'sprint' && linesCleared >= sprintTarget) {
+      finishSprint();
+    }
+
+    saveStats();
+    checkAchievements();
+    updateScore();
+    updateBalance();
+  } else {
+    combo = 0;
+    updateScore();
+  }
+}
+
 function merge(arena, player) {
-  player.matrix.forEach((row,y) =>
-    row.forEach((val,x) => {
+  player.matrix.forEach((row, y) =>
+    row.forEach((val, x) => {
       if (val) arena[y + player.pos.y][x + player.pos.x] = val;
     })
   );
 }
 
-// --- Сброс игрока и новая фигура ---
-function playerReset() {
+function randomPiece() {
   const pieces = 'TJLOSZI';
-  player.matrix = createPiece(pieces[Math.floor(Math.random()*pieces.length)]);
+  return createPiece(pieces[(Math.random() * pieces.length) | 0]);
+}
+
+function playerReset() {
+  player.matrix = player.next || randomPiece();
+  player.next = randomPiece();
   player.pos.y = 0;
-  player.pos.x = ((arena[0].length/2)|0) - ((player.matrix[0].length/2)|0);
-  if (collide(arena,player)) {
-    arena.forEach(r=>r.fill(0));
-    score = 0; updateScore(); updateBalance();
+  player.pos.x = ((arena[0].length / 2) | 0) - ((player.matrix[0].length / 2) | 0);
+  holdLocked = false;
+  if (collide(arena, player)) {
+    endGame(false);
   }
 }
 
-// --- Падение фигуры вниз ---
 function playerDrop() {
+  if (paused || gameOver) return;
   player.pos.y++;
-  if (collide(arena,player)) {
+  if (collide(arena, player)) {
     player.pos.y--;
-    merge(arena,player);
-    
-// === Инициализация игры ===
-playerReset();
+    merge(arena, player);
     arenaSweep();
+    playerReset();
+    sfx('drop');
+  } else if (softDropping) {
+    score += 1;
+    updateScore();
   }
   dropCounter = 0;
 }
 
-// --- Перемещение влево/вправо ---
-function playerMove(dir) {
-  player.pos.x += dir;
-  if (collide(arena,player)) player.pos.x -= dir;
+function playerHardDrop() {
+  if (paused || gameOver) return;
+  let dist = 0;
+  while (!collide(arena, player)) { player.pos.y++; dist++; }
+  player.pos.y--;
+  dist--;
+  merge(arena, player);
+  arenaSweep();
+  playerReset();
+  dropCounter = 0;
+  score += Math.max(0, dist) * 2;
+  updateScore();
+  sfx('drop');
+  vibrate(10);
 }
 
-// --- Поворот фигуры игрока ---
+function playerMove(dir) {
+  if (paused || gameOver) return;
+  player.pos.x += dir;
+  if (collide(arena, player)) player.pos.x -= dir;
+  else sfx('move');
+}
+
 function playerRotate(dir) {
+  if (paused || gameOver) return;
   const pos = player.pos.x;
   let offset = 1;
-  rotate(player.matrix,dir);
-  while (collide(arena,player)) {
-    player.pos.x += offset;
-    offset = -(offset + (offset>0?1:-1));
-    if (Math.abs(offset) > player.matrix[0].length) {
-      rotate(player.matrix,-dir);
-      player.pos.x = pos;
-      break;
-    }
+  rotate(player.matrix, dir);
+  // improved wall kicks
+  const kicks = [0, 1, -1, 2, -2];
+  let ok = false;
+  for (const k of kicks) {
+    player.pos.x = pos + k;
+    if (!collide(arena, player)) { ok = true; break; }
   }
+  if (!ok) {
+    rotate(player.matrix, -dir);
+    player.pos.x = pos;
+    return;
+  }
+  sfx('rotate');
 }
 
-// --- Игровой цикл ---
-function update(time=0) {
+function playerHold() {
+  if (paused || gameOver || holdLocked) return;
+  const current = player.matrix;
+  if (holdMatrix) {
+    player.matrix = holdMatrix;
+    holdMatrix = current;
+  } else {
+    holdMatrix = current;
+    player.matrix = player.next;
+    player.next = randomPiece();
+  }
+  player.pos.y = 0;
+  player.pos.x = ((arena[0].length / 2) | 0) - ((player.matrix[0].length / 2) | 0);
+  if (collide(arena, player)) {
+    // undo is hard — just end if impossible
+    endGame(false);
+    return;
+  }
+  holdLocked = true;
+  drawHoldPiece();
+  sfx('hold');
+}
+
+function formatTime(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const ss = s % 60;
+  return m + ':' + String(ss).padStart(2, '0');
+}
+
+function startGame() {
+  arena.forEach(r => r.fill(0));
+  score = 0; level = 1; linesCleared = 0; combo = 0;
+  dropInterval = gameMode === 'zen' ? 1200 : 1000;
+  gameOver = false; paused = false;
+  holdMatrix = null; holdLocked = false;
+  particles = []; shakeTime = 0;
+  player.next = randomPiece();
+  player.matrix = null;
+  playerReset();
+  if (!player.matrix) {
+    player.matrix = randomPiece();
+    player.pos = { x: 4, y: 0 };
+  }
+  updateScore();
+  const tc = document.getElementById('timer-card');
+  if (gameMode === 'sprint') {
+    sprintStart = performance.now();
+    sprintElapsed = 0;
+    if (tc) tc.style.display = '';
+  } else {
+    if (tc) tc.style.display = 'none';
+  }
+  questProgress('games', 1);
+}
+
+function endGame(won) {
+  gameOver = true;
+  paused = true;
+  sfx('gameover');
+  if (score > stats.bestScore) { stats.bestScore = score; saveStats(); }
+  checkAchievements();
+  document.getElementById('go-title').textContent = won ? 'СПРИНТ ПРОЙДЕН!' : 'GAME OVER';
+  document.getElementById('go-score').textContent = score;
+  document.getElementById('go-lines').textContent = linesCleared;
+  document.getElementById('go-level').textContent = level;
+  const tr = document.getElementById('go-time-row');
+  if (gameMode === 'sprint') {
+    tr.style.display = '';
+    document.getElementById('go-time').textContent = formatTime(sprintElapsed);
+  } else tr.style.display = 'none';
+  showScreen(goScreen);
+}
+
+function finishSprint() {
+  sprintElapsed = performance.now() - sprintStart;
+  stats.sprints = (stats.sprints || 0) + 1;
+  saveStats();
+  checkAchievements();
+  endGame(true);
+  toast('Спринт: ' + formatTime(sprintElapsed));
+}
+
+document.getElementById('go-retry')?.addEventListener('click', () => {
+  startGame();
+  showScreen(gameDiv);
+});
+document.getElementById('go-menu')?.addEventListener('click', () => {
+  showScreen(modeScreen);
+});
+document.getElementById('go-share')?.addEventListener('click', async () => {
+  const text = `Tetris · ${score} очков · ${linesCleared} линий · ур.${level}` +
+    (gameMode === 'sprint' ? ` · ${formatTime(sprintElapsed)}` : '');
+  try {
+    if (navigator.share) await navigator.share({ text });
+    else {
+      await navigator.clipboard.writeText(text);
+      toast('Скопировано!');
+    }
+  } catch(e) {
+    try { await navigator.clipboard.writeText(text); toast('Скопировано!'); } catch(e2) {}
+  }
+});
+
+// ===================== LOOP =====================
+function update(time = 0) {
   const delta = time - lastTime;
   lastTime = time;
-  dropCounter += delta;
-  if (dropCounter > dropInterval) playerDrop();
+
+  if (!paused && !gameOver && player.matrix) {
+    dropCounter += delta;
+    if (dropCounter > dropInterval) playerDrop();
+    if (gameMode === 'sprint' && sprintStart) {
+      sprintElapsed = performance.now() - sprintStart;
+      const tv = document.getElementById('timer-val');
+      if (tv) tv.textContent = formatTime(sprintElapsed);
+    }
+  }
+  if (shakeTime > 0) shakeTime -= delta;
+  updateParticles(delta);
   draw();
   requestAnimationFrame(update);
 }
 
-// === Управление с помощью кнопок на экране ===
+// ===================== CONTROLS =====================
 ['left','right','down','rotate'].forEach(id => {
   const btn = document.getElementById(id);
-  let iv, tapped = false;
+  if (!btn) return;
+  let iv;
   const action = () => {
-    if (id==='left')  playerMove(-1);
-    if (id==='right') playerMove(1);
-    if (id==='down')  playerDrop();
-    if (id==='rotate')playerRotate(1);
+    if (id === 'left') playerMove(-1);
+    if (id === 'right') playerMove(1);
+    if (id === 'down') { softDropping = true; playerDrop(); }
+    if (id === 'rotate') playerRotate(1);
   };
-  btn.addEventListener('mousedown', ()=>{ tapped=false; action(); iv=setInterval(action,100); });
-  btn.addEventListener('mouseup',   ()=>clearInterval(iv));
-  btn.addEventListener('mouseleave',()=>clearInterval(iv));
-  btn.addEventListener('click',     ()=>{ if(!tapped) action(); });
-  btn.addEventListener('touchstart',e=>{ e.preventDefault(); tapped=false; action(); iv=setInterval(action,100); },{passive:false});
-  btn.addEventListener('touchend',  e=>{ e.preventDefault(); clearInterval(iv); tapped=true; },{passive:false});
+  btn.addEventListener('mousedown', () => { action(); iv = setInterval(action, 90); });
+  btn.addEventListener('mouseup', () => { clearInterval(iv); softDropping = false; });
+  btn.addEventListener('mouseleave', () => { clearInterval(iv); softDropping = false; });
+  btn.addEventListener('touchstart', e => { e.preventDefault(); action(); iv = setInterval(action, 90); }, { passive: false });
+  btn.addEventListener('touchend', e => { e.preventDefault(); clearInterval(iv); softDropping = false; }, { passive: false });
 });
 
-// === Управление с клавиатуры ===
+document.getElementById('hard-drop')?.addEventListener('click', () => playerHardDrop());
+document.getElementById('hold-btn')?.addEventListener('click', () => playerHold());
+document.getElementById('pause-btn')?.addEventListener('click', () => {
+  if (!gameOver && gameDiv.style.display !== 'none') paused = !paused;
+});
+
 document.addEventListener('keydown', e => {
-  if (e.key==='ArrowLeft')  playerMove(-1);
-  if (e.key==='ArrowRight') playerMove(1);
-  if (e.key==='ArrowDown')  playerDrop();
-  if (e.key==='ArrowUp')    playerRotate(1);
+  if (['ArrowLeft','ArrowRight','ArrowDown','ArrowUp',' '].includes(e.key)) e.preventDefault();
+  if (e.key === 'ArrowLeft') playerMove(-1);
+  if (e.key === 'ArrowRight') playerMove(1);
+  if (e.key === 'ArrowDown') { softDropping = true; playerDrop(); }
+  if (e.key === 'ArrowUp') playerRotate(1);
+  if (e.key === ' ' || e.code === 'Space') playerHardDrop();
+  if (e.key === 'c' || e.key === 'C' || e.key === 'с' || e.key === 'С') playerHold();
+  if (e.key === 'p' || e.key === 'P' || e.key === 'з' || e.key === 'З') {
+    if (!gameOver && gameDiv.classList.contains('active-screen') || gameDiv.style.display === 'flex')
+      paused = !paused;
+  }
+  if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
+    if (gameOver) { startGame(); showScreen(gameDiv); }
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.key === 'ArrowDown') softDropping = false;
 });
 
-// === Инициализация игры ===
-playerReset();
+// Swipes
+(function() {
+  const el = canvas;
+  let sx = 0, sy = 0, st = 0;
+  el.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now();
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx, dy = t.clientY - sy;
+    const dt = Date.now() - st;
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    if (dt > 500) return;
+    if (absX < 20 && absY < 20) { playerRotate(1); return; }
+    if (absX > absY) {
+      if (dx > 30) playerMove(1);
+      else if (dx < -30) playerMove(-1);
+    } else {
+      if (dy > 40) playerHardDrop();
+      else if (dy < -40) playerHold();
+    }
+  }, { passive: true });
+})();
+
+// ===================== INIT =====================
 updateScore();
 updateBalance();
+updateCaseTimer();
+showScreen(modeScreen);
 update();
 
-// === Firebase: онлайн-пользователи ===
-const firebaseConfig = {
-  apiKey: "AIzaSyB1N9wwPZh1vQkIt-V7by8FW-7xoZobsDg",
-  authDomain: "tetris2-71bfa.firebaseapp.com",
-  databaseURL: "https://tetris2-71bfa-default-rtdb.firebaseio.com",
-  projectId: "tetris2-71bfa",
-  storageBucket: "tetris2-71bfa.appspot.com",
-  messagingSenderId: "38355194193",
-  appId: "1:38355194193:web:93229f575c86111a8f7af0"
-};
-
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-
-const id = Math.random().toString(36).substring(2);
-const presenceRef = db.ref("/online/" + id);
-presenceRef.set(true);
-presenceRef.onDisconnect().remove();
-
-db.ref("/online").on("value", (snapshot) => {
-  const count = snapshot.numChildren();
-  const el = document.getElementById("online-count");
-  if (el) el.textContent = count;
-});
+// Firebase
+try {
+  const firebaseConfig = {
+    apiKey: "AIzaSyB1N9wwPZh1vQkIt-V7by8FW-7xoZobsDg",
+    authDomain: "tetris2-71bfa.firebaseapp.com",
+    databaseURL: "https://tetris2-71bfa-default-rtdb.firebaseio.com",
+    projectId: "tetris2-71bfa",
+    storageBucket: "tetris2-71bfa.appspot.com",
+    messagingSenderId: "38355194193",
+    appId: "1:38355194193:web:93229f575c86111a8f7af0"
+  };
+  if (typeof firebase !== 'undefined') {
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const id = Math.random().toString(36).substring(2);
+    const presenceRef = db.ref('/online/' + id);
+    presenceRef.set(true);
+    presenceRef.onDisconnect().remove();
+    db.ref('/online').on('value', snapshot => {
+      const el = document.getElementById('online-count');
+      if (el) el.textContent = snapshot.numChildren();
+    });
+  }
+} catch (e) { console.warn('Firebase', e); }

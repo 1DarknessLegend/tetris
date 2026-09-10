@@ -2,60 +2,197 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#07070f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Тетрис</title>
-  <!-- === Название вкладки браузера === -->
-  <!-- === Подключение таблицы стилей === -->
-<link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  
-<!-- === Игровой экран: основная сцена игры Тетрис === -->
-<div id="game">
-    <h1>Тетрис</h1>
-    <div id="score">Очки: 0</div>
-    <canvas id="tetris" width="240" height="400"></canvas>
-    <div class="controls">
-      <button id="left">←</button>
-      <button id="rotate">⟳</button>
-      <button id="right">→</button>
-      <button id="down">↓</button>
-    </div>
-      <button id="shop">Магазин</button>
-      <button id="easter-egg">Пасхалка</button>
-      <button id="case-btn">Кейс</button>
-    </div>
+
+<!-- MODE SELECT -->
+<div id="mode-screen" class="screen active-screen">
+  <div class="mode-hero">
+    <div class="logo big">TETRIS</div>
+    <p class="mode-sub">выбери режим</p>
   </div>
-  
-<!-- === Экран кейса: интерфейс открытия кейса === -->
-<div id="case-screen">
-    <h1 class="case-title">Кейс</h1>
-    <div id="case-timer">Доступно через: <span id="timer">00:00</span></div>
-    
-  <div id="case-scroll-wrapper">
-    <div id="case-indicator"></div>
-    <div id="case-scroll"></div>
+  <div class="mode-list">
+    <button class="mode-card" data-mode="classic">
+      <span class="mode-emoji">♾️</span>
+      <span class="mode-name">Марафон</span>
+      <span class="mode-desc">Классика · уровни растут</span>
+    </button>
+    <button class="mode-card" data-mode="sprint">
+      <span class="mode-emoji">⚡</span>
+      <span class="mode-name">Спринт 40L</span>
+      <span class="mode-desc">Очисти 40 линий на время</span>
+    </button>
+    <button class="mode-card" data-mode="zen">
+      <span class="mode-emoji">🧘</span>
+      <span class="mode-name">Дзен</span>
+      <span class="mode-desc">Без ускорения · спокойно</span>
+    </button>
+  </div>
+  <div class="mode-footer">
+    <button id="open-achievements" class="ghost-btn">🏆 Достижения</button>
+    <button id="open-quests" class="ghost-btn">📋 Квесты</button>
+  </div>
+</div>
+
+<!-- ACHIEVEMENTS -->
+<div id="achievements-screen" class="screen">
+  <button class="back-btn" id="ach-back">← Назад</button>
+  <h1 class="screen-title">Достижения</h1>
+  <div id="achievements-list" class="list-scroll"></div>
+</div>
+
+<!-- QUESTS -->
+<div id="quests-screen" class="screen">
+  <button class="back-btn" id="quests-back">← Назад</button>
+  <h1 class="screen-title">Ежедневные квесты</h1>
+  <p class="quests-date" id="quests-date"></p>
+  <div id="quests-list" class="list-scroll"></div>
+</div>
+
+<!-- MAIN GAME -->
+<div id="game" class="screen">
+  <header class="game-header">
+    <button id="menu-btn" class="icon-chip" title="Меню">☰</button>
+    <div class="logo">TETRIS</div>
+    <div class="online-badge" id="online-container">
+      <span class="online-dot"></span>
+      <span id="online-count">0</span>
+    </div>
+  </header>
+
+  <div class="game-layout">
+    <aside class="side-panel">
+      <div class="stat-card">
+        <span class="stat-label">Счёт</span>
+        <span class="stat-value" id="score-val">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Рекорд</span>
+        <span class="stat-value dim" id="high-val">0</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-card mini">
+          <span class="stat-label">Ур.</span>
+          <span class="stat-value" id="level-val">1</span>
+        </div>
+        <div class="stat-card mini">
+          <span class="stat-label">Линии</span>
+          <span class="stat-value" id="lines-val">0</span>
+        </div>
+      </div>
+      <div class="stat-card mini" id="combo-card" style="display:none">
+        <span class="stat-label">Комбо</span>
+        <span class="stat-value" id="combo-val">0</span>
+      </div>
+      <div class="stat-card" id="timer-card" style="display:none">
+        <span class="stat-label">Время</span>
+        <span class="stat-value" id="timer-val">0:00</span>
+      </div>
+      <button id="pause-btn" class="pause-btn" title="Пауза (P)">⏸</button>
+    </aside>
+
+    <div class="board-wrap" id="board-wrap">
+      <canvas id="tetris" width="240" height="400"></canvas>
+      <div id="fx-layer"></div>
+    </div>
+
+    <aside class="side-panel right-side">
+      <div class="stat-card next-card">
+        <span class="stat-label">След.</span>
+        <canvas id="next-piece" width="72" height="72"></canvas>
+      </div>
+      <div class="stat-card hold-card">
+        <span class="stat-label">Hold (C)</span>
+        <canvas id="hold-piece" width="72" height="72"></canvas>
+      </div>
+    </aside>
   </div>
 
-  <button id="open-case" disabled>Открыть</button>
-    <button id="return-case" class="controls-btn">←</button>
+  <div class="controls">
+    <button id="hold-btn" class="ctrl-btn hold" aria-label="Hold">H</button>
+    <button id="left" class="ctrl-btn" aria-label="Влево">◀</button>
+    <button id="rotate" class="ctrl-btn" aria-label="Поворот">↻</button>
+    <button id="down" class="ctrl-btn" aria-label="Вниз">▼</button>
+    <button id="right" class="ctrl-btn" aria-label="Вправо">▶</button>
+    <button id="hard-drop" class="ctrl-btn hard" aria-label="Hard drop">⏬</button>
   </div>
 
-<!-- === Пасхальный экран: скрытые элементы и пасхалки === -->
-<div id="easter-screen">
-    <button id="return" class="controls-btn">←</button>
+  <nav class="bottom-nav">
+    <button id="shop" class="nav-btn">
+      <span class="nav-icon">🛒</span><span>Магазин</span>
+    </button>
+    <button id="case-btn" class="nav-btn gold">
+      <span class="nav-icon">🎁</span><span>Кейс</span>
+    </button>
+    <button id="easter-egg" class="nav-btn pink">
+      <span class="nav-icon">☠️</span><span>Пасхалка</span>
+    </button>
+  </nav>
+</div>
+
+<!-- GAME OVER OVERLAY -->
+<div id="gameover-screen" class="screen">
+  <div class="go-card">
+    <div class="go-title" id="go-title">GAME OVER</div>
+    <div class="go-stats">
+      <div><span>Счёт</span><b id="go-score">0</b></div>
+      <div><span>Линии</span><b id="go-lines">0</b></div>
+      <div><span>Уровень</span><b id="go-level">1</b></div>
+      <div id="go-time-row" style="display:none"><span>Время</span><b id="go-time">0:00</b></div>
+    </div>
+    <div class="go-actions">
+      <button id="go-retry" class="primary-btn">Ещё раз</button>
+      <button id="go-menu" class="ghost-btn">В меню</button>
+      <button id="go-share" class="ghost-btn">Поделиться</button>
+    </div>
+  </div>
+</div>
+
+<!-- CASE -->
+<div id="case-screen" class="screen">
+  <button id="return-case" class="back-btn">← Назад</button>
+  <div class="case-body">
+    <div class="case-hero">
+      <div class="case-glow"></div>
+      <div class="case-emoji">🎁</div>
+      <h1 class="case-title">Кейс</h1>
+      <p id="case-timer">Доступно через <span id="timer">00:00</span></p>
+    </div>
+    <div id="case-scroll-wrapper">
+      <div id="case-indicator"></div>
+      <div id="case-scroll"></div>
+    </div>
+    <button id="open-case" disabled>Открыть кейс</button>
+  </div>
+</div>
+
+<!-- EASTER -->
+<div id="easter-screen" class="screen">
+  <button id="return" class="back-btn">← Назад</button>
+  <div class="easter-body">
     <div class="easter-text">Слинял отсюда быстро ☠️</div>
-    <button id="secret-btn" aria-label="Секретная кнопка"></button>
+    <button id="secret-btn" aria-label="Секрет"></button>
   </div>
+</div>
 
-<!-- === Экран магазина: темы и покупка за очки === -->
-<div id="shop-screen">
+<!-- SHOP -->
+<div id="shop-screen" class="screen">
+  <button id="return-shop" class="back-btn">← Назад</button>
+  <div class="shop-top">
     <h1>Магазин</h1>
-      <button id="return-shop" class="controls-btn">←</button>
-    <div id="balance">Баланс: 0</div>
-    <input type="text" id="search" placeholder="Поиск темы..." />
+    <div id="balance" class="balance-pill">💎 <span id="balance-num">0</span></div>
+  </div>
+  <div class="search-wrap">
+    <input type="text" id="search" placeholder="Поиск темы..." autocomplete="off" />
+  </div>
+  <div id="shop-items">
 
-    <div id="shop-items">
+
       
       <div class="shop-item">
         <div class="shop-row">
@@ -557,12 +694,11 @@
           <button id="remove-endoskeleton">Выкл тему </button>
         </div>
       </div>
-    </div>
   </div>
+  </div>
+</div>
 
-  <!-- === Подключение таблицы стилей === -->
-<link rel="stylesheet" href="style.css">
-  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
 
 <!-- === Аудиофайлы и видеоконтент тем === -->
@@ -619,9 +755,8 @@
    <video id="endoskeleton-video" src="https://1darknesslegend.github.io/endoskeleton/endoskeleton.mp4" loop preload="auto" style="display:none"></video>
   
 <!-- === Отображение количества игроков онлайн === -->
-<div id="online-container">Онлайн: <span id="online-count">0</span></div>
-
 <!-- === Основной скрипт игры === -->
 <script src="script.js"></script>
 </body>
 </html>
+
