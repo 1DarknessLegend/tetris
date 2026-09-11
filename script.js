@@ -23,7 +23,7 @@ let dropCounter = 0;
 let paused = false;
 let gameOver = false;
 let combo = 0;
-let gameMode = 'classic'; // classic | sprint | zen | hunger
+let gameMode = 'classic'; // classic | sprint | zen
 let sprintTarget = 40;
 let sprintStart = 0;
 let sprintElapsed = 0;
@@ -32,27 +32,6 @@ let holdLocked = false;
 let particles = [];
 let shakeTime = 0;
 let softDropping = false;
-let lastRotateWasKick = false;
-let hungerTimer = 0;
-let hungerInterval = 12000;
-
-// Settings
-const settings = Object.assign({
-  sound: true, vibrate: true, ghost: true, skin: 'classic', das: 250
-}, JSON.parse(localStorage.getItem('tetrisSettings') || '{}'));
-
-function saveSettings() {
-  localStorage.setItem('tetrisSettings', JSON.stringify(settings));
-}
-
-const SKINS = {
-  classic: [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'],
-  neon:    [null, '#ff00aa', '#00f0ff', '#39ff14', '#bf00ff', '#ff6b00', '#ffff00', '#00a2ff'],
-  glass:   [null, '#f9a8d4', '#a5f3fc', '#bbf7d0', '#e9d5ff', '#fed7aa', '#fef08a', '#bfdbfe'],
-  pastel:  [null, '#f472b6', '#67e8f9', '#86efac', '#c4b5fd', '#fdba74', '#fde047', '#93c5fd'],
-  mono:    [null, '#e2e8f0', '#cbd5e1', '#94a3b8', '#f1f5f9', '#64748b', '#e2e8f0', '#cbd5e1'],
-};
-let colors = SKINS[settings.skin] || SKINS.classic;
 
 // ===================== THEMES =====================
 const themes = [
@@ -80,35 +59,14 @@ const ACHIEVEMENTS = [
   { id: 'buyer', name: 'Шопоголик', desc: 'Купи 3 темы', check: s => s.themesBought >= 3 },
   { id: 'collector', name: 'Коллекционер', desc: 'Купи 10 тем', check: s => s.themesBought >= 10 },
   { id: 'case_open', name: 'Удача', desc: 'Открой кейс', check: s => s.casesOpened >= 1 },
-  { id: 'tspin', name: 'T-Spin', desc: 'Сделай T-Spin', check: s => (s.tspins || 0) >= 1 },
-  { id: 'hunger_surv', name: 'Выживший', desc: 'Очисти 20 линий в Голоде', check: s => (s.hungerLines || 0) >= 20 },
-  { id: 'profile_5', name: 'Уровень 5', desc: 'Профиль 5 уровня', check: s => profileLevel() >= 5 },
-  { id: 'profile_10', name: 'Уровень 10', desc: 'Профиль 10 уровня', check: s => profileLevel() >= 10 },
 ];
 
 let stats = JSON.parse(localStorage.getItem('tetrisStats') || '{}');
 stats = Object.assign({
   totalLines: 0, bestScore: 0, tetrises: 0, maxCombo: 0,
   maxLevel: 1, sprints: 0, themesBought: 0, casesOpened: 0,
-  tspins: 0, hungerLines: 0, unlocked: {}
+  unlocked: {}
 }, stats);
-
-function profileLevel() {
-  return Math.floor((stats.totalLines || 0) / 25) + 1;
-}
-function profileXP() {
-  return (stats.totalLines || 0) % 25;
-}
-function updateProfileUI() {
-  const lv = document.getElementById('profile-level');
-  const xp = document.getElementById('profile-xp');
-  const fill = document.getElementById('xp-fill');
-  const level = profileLevel();
-  const cur = profileXP();
-  if (lv) lv.textContent = level;
-  if (xp) xp.textContent = cur + '/25 XP';
-  if (fill) fill.style.width = (cur / 25 * 100) + '%';
-}
 
 function saveStats() {
   localStorage.setItem('tetrisStats', JSON.stringify(stats));
@@ -224,7 +182,6 @@ function ensureAudio() {
 }
 
 function sfx(type) {
-  if (!settings.sound) return;
   ensureAudio();
   if (!audioCtx) return;
   const o = audioCtx.createOscillator();
@@ -268,7 +225,6 @@ function sfx(type) {
 }
 
 function vibrate(ms) {
-  if (!settings.vibrate) return;
   try { if (navigator.vibrate) navigator.vibrate(ms); } catch(e) {}
 }
 
@@ -314,32 +270,6 @@ themes.slice(1).forEach(t => {
     el.preload = 'none';
   }
 });
-
-
-// ===================== THEME OF THE DAY =====================
-function themeOfDay() {
-  const day = Math.floor(Date.now() / 86400000);
-  const list = themes.filter(t => t !== 'theme');
-  return list[day % list.length];
-}
-function setupThemeOfDay() {
-  const tid = themeOfDay();
-  const nameEl = document.getElementById('tod-name');
-  if (nameEl) nameEl.textContent = tid;
-  document.getElementById('tod-apply')?.addEventListener('click', () => {
-    themes.forEach(x => active[x] = false);
-    active[tid] = true;
-    if (mellMusic) { mellMusic.pause(); mellMusic.currentTime = 0; }
-    Object.values(vids).forEach(v => { try { v.pause(); v.currentTime = 0; } catch(e){} });
-    const v = vids[tid];
-    if (v) {
-      if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
-      v.play().catch(() => {});
-    }
-    toast('Тема дня: ' + tid);
-    sfx('coin');
-  });
-}
 
 const mellBG = new Image();
 mellBG.src = 'https://avatars.mds.yandex.net/i?id=f929b30edd21b71bed35148895c13bd3_l-4531164-images-thumbs&n=13';
@@ -444,13 +374,12 @@ themes.forEach(t => {
 // ===================== SCREENS =====================
 function showScreen(el) {
   document.querySelectorAll('.screen').forEach(s => {
-    s.classList.remove('active-screen');
     s.style.display = 'none';
+    s.classList.remove('active-screen');
   });
   if (!el) return;
   el.style.display = 'flex';
-  // next frame for CSS transition
-  requestAnimationFrame(() => el.classList.add('active-screen'));
+  el.classList.add('active-screen');
 }
 
 document.getElementById('shop')?.addEventListener('click', () => {
@@ -521,77 +450,6 @@ if (secretBtn) {
   document.body.appendChild(secretMenu);
   secretBtn.addEventListener('click', () => { secretMenu.style.display = 'flex'; });
   closeSecret.addEventListener('click', () => { secretMenu.style.display = 'none'; });
-}
-
-
-// Settings UI
-function bindSettings() {
-  const map = [
-    ['set-sound', 'sound', 'checked'],
-    ['set-vibrate', 'vibrate', 'checked'],
-    ['set-ghost', 'ghost', 'checked'],
-    ['set-skin', 'skin', 'value'],
-    ['set-das', 'das', 'value'],
-  ];
-  map.forEach(([id, key, prop]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (prop === 'checked') el.checked = !!settings[key];
-    else el.value = String(settings[key]);
-    el.addEventListener('change', () => {
-      settings[key] = prop === 'checked' ? el.checked : (key === 'das' ? +el.value : el.value);
-      if (key === 'skin') colors = SKINS[settings.skin] || SKINS.classic;
-      saveSettings();
-    });
-  });
-  colors = SKINS[settings.skin] || SKINS.classic;
-}
-document.getElementById('open-settings')?.addEventListener('click', () => {
-  showScreen(document.getElementById('settings-screen'));
-});
-document.getElementById('settings-back')?.addEventListener('click', () => showScreen(modeScreen));
-document.getElementById('open-leaderboard')?.addEventListener('click', () => {
-  renderLeaderboard();
-  showScreen(document.getElementById('leaderboard-screen'));
-});
-document.getElementById('lb-back')?.addEventListener('click', () => showScreen(modeScreen));
-
-function submitScore(sc) {
-  try {
-    if (typeof firebase === 'undefined') return;
-    const db = firebase.database();
-    const name = localStorage.getItem('tetrisName') || ('Игрок' + Math.floor(Math.random()*9000+1000));
-    localStorage.setItem('tetrisName', name);
-    db.ref('/scores').push({ name, score: sc, mode: gameMode, ts: Date.now() });
-  } catch(e) {}
-}
-
-function renderLeaderboard() {
-  const list = document.getElementById('leaderboard-list');
-  if (!list) return;
-  list.innerHTML = '<div class="list-item"><div class="li-desc">Загрузка...</div></div>';
-  try {
-    if (typeof firebase === 'undefined') {
-      list.innerHTML = '<div class="list-item"><div class="li-desc">Нет соединения</div></div>';
-      return;
-    }
-    firebase.database().ref('/scores').orderByChild('score').limitToLast(20).once('value', snap => {
-      const rows = [];
-      snap.forEach(c => rows.push(c.val()));
-      rows.sort((a,b) => b.score - a.score);
-      if (!rows.length) {
-        list.innerHTML = '<div class="list-item"><div class="li-desc">Пока пусто — сыграй!</div></div>';
-        return;
-      }
-      list.innerHTML = rows.map((r,i) =>
-        `<div class="list-item"><div class="li-icon">${i===0?'🥇':i===1?'🥈':i===2?'🥉':'#'+(i+1)}</div>
-        <div class="li-body"><div class="li-name">${r.name||'?'}</div>
-        <div class="li-desc">${r.score} · ${r.mode||''}</div></div></div>`
-      ).join('');
-    });
-  } catch(e) {
-    list.innerHTML = '<div class="list-item"><div class="li-desc">Ошибка загрузки</div></div>';
-  }
 }
 
 // ===================== CASE =====================
@@ -706,7 +564,7 @@ function createMatrix(w, h) {
 const arena = createMatrix(12, 20);
 const player = { pos: { x: 0, y: 0 }, matrix: null, next: null };
 
-// colors from SKINS
+const colors = [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'];
 
 function collide(arena, p) {
   const [m, o] = [p.matrix, p.pos];
@@ -746,19 +604,8 @@ function drawMatrix(matrix, offset, alpha = 1) {
         const dy = y + offset.y, dx = x + offset.x;
         if (dy >= 0 && dy < arena.length && dx >= 0 && dx < arena[0].length) {
           ctx.globalAlpha = alpha;
-          const c = colors[val] || colors[7] || '#888';
-          ctx.fillStyle = c;
+          ctx.fillStyle = colors[val];
           ctx.fillRect(dx, dy, 1, 1);
-          if (settings.skin === 'neon') {
-            ctx.strokeStyle = c;
-            ctx.lineWidth = 0.08;
-            ctx.globalAlpha = alpha * 0.5;
-            ctx.strokeRect(dx - 0.05, dy - 0.05, 1.1, 1.1);
-            ctx.globalAlpha = alpha;
-          } else if (settings.skin === 'glass') {
-            ctx.fillStyle = 'rgba(255,255,255,0.25)';
-            ctx.fillRect(dx, dy, 1, 0.35);
-          }
           ctx.strokeStyle = 'rgba(0,0,0,0.35)';
           ctx.lineWidth = 0.05;
           ctx.strokeRect(dx, dy, 1, 1);
@@ -883,7 +730,7 @@ function draw() {
   for (let y = 0; y <= 20; y++) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(12, y); ctx.stroke(); }
 
   drawMatrix(arena, { x: 0, y: 0 });
-  if (settings.ghost && player.matrix && !gameOver) {
+  if (player.matrix && !gameOver) {
     const gy = getGhostY();
     if (gy >= 0) drawMatrix(player.matrix, { x: player.pos.x, y: gy }, 0.25);
   }
@@ -924,23 +771,13 @@ function arenaSweep() {
     const pointsTable = [0, 100, 300, 500, 800];
     let gained = (pointsTable[rowCount] || 800) * level;
     if (combo > 1) gained += 50 * combo * level;
-    // T-Spin bonus (checked before piece merges... we check on last rotate flag stored)
-    if (window._pendingTSpin) {
-      gained += 400 * level * rowCount;
-      stats.tspins = (stats.tspins || 0) + 1;
-      toast('T-SPIN! +' + (400 * level * rowCount));
-      window._pendingTSpin = false;
-      sfx('tetris');
-    }
     score += gained;
     balance += gained;
     linesCleared += rowCount;
     stats.totalLines += rowCount;
-    if (gameMode === 'hunger') stats.hungerLines = (stats.hungerLines || 0) + rowCount;
     questProgress('lines', rowCount);
     questProgress('score', gained);
     if (combo >= 3) questProgress('combo', combo);
-    updateProfileUI();
 
     clearedYs.forEach(y => spawnParticles(y, 18));
     if (rowCount >= 4) {
@@ -1009,7 +846,6 @@ function playerDrop() {
   player.pos.y++;
   if (collide(arena, player)) {
     player.pos.y--;
-    window._pendingTSpin = checkTSpin();
     merge(arena, player);
     arenaSweep();
     playerReset();
@@ -1027,7 +863,6 @@ function playerHardDrop() {
   while (!collide(arena, player)) { player.pos.y++; dist++; }
   player.pos.y--;
   dist--;
-  window._pendingTSpin = checkTSpin();
   merge(arena, player);
   arenaSweep();
   playerReset();
@@ -1046,81 +881,23 @@ function playerMove(dir) {
 }
 
 function playerRotate(dir) {
-  if (paused || gameOver || !player.matrix) return;
+  if (paused || gameOver) return;
   const pos = player.pos.x;
-  const py = player.pos.y;
+  let offset = 1;
   rotate(player.matrix, dir);
+  // improved wall kicks
   const kicks = [0, 1, -1, 2, -2];
   let ok = false;
-  let usedKick = false;
   for (const k of kicks) {
     player.pos.x = pos + k;
-    if (!collide(arena, player)) {
-      ok = true;
-      usedKick = k !== 0;
-      break;
-    }
-  }
-  if (!ok) {
-    // try small vertical kicks
-    for (const ky of [-1, 1]) {
-      for (const k of [0, 1, -1]) {
-        player.pos.x = pos + k;
-        player.pos.y = py + ky;
-        if (!collide(arena, player)) {
-          ok = true; usedKick = true; break;
-        }
-      }
-      if (ok) break;
-    }
+    if (!collide(arena, player)) { ok = true; break; }
   }
   if (!ok) {
     rotate(player.matrix, -dir);
     player.pos.x = pos;
-    player.pos.y = py;
     return;
   }
-  lastRotateWasKick = usedKick;
   sfx('rotate');
-}
-
-function isTPiece(m) {
-  if (!m || m.length < 2) return false;
-  // T shape has 4 cells in T configuration
-  let cells = 0;
-  m.forEach(r => r.forEach(v => { if (v === 1) cells++; }));
-  return cells === 4 || (m.some(r => r.includes(1)) && cells >= 3);
-}
-
-function checkTSpin() {
-  if (!player.matrix) return false;
-  // crude T-spin: last move was rotate and 3+ corners blocked around center
-  let hasT = false;
-  player.matrix.forEach(r => r.forEach(v => { if (v === 1) hasT = true; }));
-  if (!hasT) return false;
-  const cx = player.pos.x + 1, cy = player.pos.y + 1;
-  const corners = [[cx-1,cy-1],[cx+1,cy-1],[cx-1,cy+1],[cx+1,cy+1]];
-  let blocked = 0;
-  corners.forEach(([x,y]) => {
-    if (y < 0 || y >= arena.length || x < 0 || x >= arena[0].length || arena[y][x] !== 0) blocked++;
-  });
-  return blocked >= 3 && lastRotateWasKick;
-}
-
-function addGarbage(n) {
-  for (let i = 0; i < n; i++) {
-    const hole = (Math.random() * 12) | 0;
-    const row = new Array(12).fill(8); // color 8 will map - need color
-    // use color index 7 as garbage look
-    for (let x = 0; x < 12; x++) row[x] = x === hole ? 0 : 7;
-    arena.shift();
-    arena.push(row);
-  }
-  // if player collides after garbage, push up or end
-  if (player.matrix && collide(arena, player)) {
-    player.pos.y--;
-    if (collide(arena, player)) endGame(false);
-  }
 }
 
 function playerHold() {
@@ -1160,8 +937,6 @@ function startGame() {
   gameOver = false; paused = false;
   holdMatrix = null; holdLocked = false;
   particles = []; shakeTime = 0;
-  hungerTimer = 0; hungerInterval = 12000;
-  lastRotateWasKick = false;
   player.next = randomPiece();
   player.matrix = null;
   playerReset();
@@ -1196,7 +971,6 @@ function endGame(won) {
     tr.style.display = '';
     document.getElementById('go-time').textContent = formatTime(sprintElapsed);
   } else tr.style.display = 'none';
-  submitScore(score);
   showScreen(goScreen);
 }
 
@@ -1243,16 +1017,6 @@ function update(time = 0) {
       const tv = document.getElementById('timer-val');
       if (tv) tv.textContent = formatTime(sprintElapsed);
     }
-    if (gameMode === 'hunger') {
-      hungerTimer += delta;
-      if (hungerTimer >= hungerInterval) {
-        hungerTimer = 0;
-        addGarbage(1);
-        // speed up garbage over time
-        hungerInterval = Math.max(4000, hungerInterval - 200);
-        sfx('drop');
-      }
-    }
   }
   if (shakeTime > 0) shakeTime -= delta;
   updateParticles(delta);
@@ -1271,10 +1035,10 @@ function update(time = 0) {
     if (id === 'down') { softDropping = true; playerDrop(); }
     if (id === 'rotate') playerRotate(1);
   };
-  btn.addEventListener('mousedown', () => { action(); iv = setInterval(action, settings.das || 150); });
+  btn.addEventListener('mousedown', () => { action(); iv = setInterval(action, 90); });
   btn.addEventListener('mouseup', () => { clearInterval(iv); softDropping = false; });
   btn.addEventListener('mouseleave', () => { clearInterval(iv); softDropping = false; });
-  btn.addEventListener('touchstart', e => { e.preventDefault(); action(); iv = setInterval(action, settings.das || 150); }, { passive: false });
+  btn.addEventListener('touchstart', e => { e.preventDefault(); action(); iv = setInterval(action, 90); }, { passive: false });
   btn.addEventListener('touchend', e => { e.preventDefault(); clearInterval(iv); softDropping = false; }, { passive: false });
 });
 
@@ -1333,9 +1097,6 @@ document.addEventListener('keyup', e => {
 updateScore();
 updateBalance();
 updateCaseTimer();
-setupThemeOfDay();
-bindSettings();
-updateProfileUI();
 showScreen(modeScreen);
 update();
 

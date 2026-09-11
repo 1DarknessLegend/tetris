@@ -7,8 +7,6 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Тетрис</title>
   <link rel="stylesheet" href="style.css">
-  <link rel="manifest" href="manifest.json">
-  <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
 
@@ -34,60 +32,10 @@
       <span class="mode-name">Дзен</span>
       <span class="mode-desc">Без ускорения · спокойно</span>
     </button>
-    <button class="mode-card" data-mode="hunger">
-      <span class="mode-emoji">🔥</span>
-      <span class="mode-name">Голод</span>
-      <span class="mode-desc">Мусорные линии снизу</span>
-    </button>
-  </div>
-  <div id="theme-of-day" class="tod-banner">
-    <span>🎁 Тема дня:</span> <b id="tod-name">—</b>
-    <button id="tod-apply" class="tod-btn">Вкл бесплатно</button>
   </div>
   <div class="mode-footer">
     <button id="open-achievements" class="ghost-btn">🏆 Достижения</button>
     <button id="open-quests" class="ghost-btn">📋 Квесты</button>
-    <button id="open-leaderboard" class="ghost-btn">🏅 Топ</button>
-    <button id="open-settings" class="ghost-btn">⚙️</button>
-  </div>
-  <div class="profile-bar">
-    <span>Профиль <b id="profile-level">1</b></span>
-    <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
-    <span id="profile-xp">0 XP</span>
-  </div>
-</div>
-
-<!-- LEADERBOARD -->
-<div id="leaderboard-screen" class="screen">
-  <button class="back-btn" id="lb-back">← Назад</button>
-  <h1 class="screen-title">Лидерборд</h1>
-  <div id="leaderboard-list" class="list-scroll"></div>
-</div>
-
-<!-- SETTINGS -->
-<div id="settings-screen" class="screen">
-  <button class="back-btn" id="settings-back">← Назад</button>
-  <h1 class="screen-title">Настройки</h1>
-  <div class="settings-body">
-    <label class="set-row"><span>Звук</span><input type="checkbox" id="set-sound" checked></label>
-    <label class="set-row"><span>Вибрация</span><input type="checkbox" id="set-vibrate" checked></label>
-    <label class="set-row"><span>Призрачная фигура</span><input type="checkbox" id="set-ghost" checked></label>
-    <label class="set-row"><span>Скин блоков</span>
-      <select id="set-skin">
-        <option value="classic">Классика</option>
-        <option value="neon">Неон</option>
-        <option value="glass">Стекло</option>
-        <option value="pastel">Пастель</option>
-        <option value="mono">Моно</option>
-      </select>
-    </label>
-    <label class="set-row"><span>Скорость DAS</span>
-      <select id="set-das">
-        <option value="150">Быстро</option>
-        <option value="250" selected>Норма</option>
-        <option value="400">Медленно</option>
-      </select>
-    </label>
   </div>
 </div>
 
