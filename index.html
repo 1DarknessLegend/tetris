@@ -12,39 +12,11 @@
 </head>
 <body>
 
-<!-- AUTH -->
-<div id="auth-screen" class="screen active-screen">
-  <div class="auth-card">
-    <div class="logo big">TETRIS</div>
-    <p class="mode-sub" id="auth-subtitle">Войди или зарегистрируйся</p>
-    <div class="auth-form">
-      <input type="text" id="auth-nick" placeholder="Никнейм" maxlength="16" autocomplete="username">
-      <input type="password" id="auth-pass" placeholder="Пароль" maxlength="32" autocomplete="current-password">
-      <div class="auth-error" id="auth-error"></div>
-      <button id="auth-login" class="mode-card auth-btn">Войти</button>
-      <button id="auth-register" class="ghost-btn auth-btn">Регистрация</button>
-      <button id="auth-guest" class="ghost-btn" style="margin-top:8px;font-size:13px">Играть как гость</button>
-    </div>
-    <div class="online-badge auth-online" id="auth-online-container" style="margin-top:20px">
-      <span class="online-dot"></span>
-      <span>Онлайн: <b id="online-count-auth">0</b></span>
-    </div>
-  </div>
-</div>
-
 <!-- MODE SELECT -->
-<div id="mode-screen" class="screen">
+<div id="mode-screen" class="screen active-screen">
   <div class="mode-hero">
     <div class="logo big">TETRIS</div>
     <p class="mode-sub">выбери режим</p>
-    <div class="online-badge mode-online" id="mode-online-container">
-      <span class="online-dot"></span>
-      <span>Онлайн: <b id="online-count-mode">0</b></span>
-    </div>
-  </div>
-  <div class="user-bar" id="user-bar">
-    <span>👤 <b id="current-user-name">Гость</b></span>
-    <button id="logout-btn" class="ghost-btn" style="padding:4px 10px;font-size:12px">Выйти</button>
   </div>
   <div class="mode-list">
     <button class="mode-card" data-mode="classic">
@@ -67,11 +39,6 @@
       <span class="mode-name">Голод</span>
       <span class="mode-desc">Мусорные линии снизу</span>
     </button>
-    <button class="mode-card" data-mode="duel">
-      <span class="mode-emoji">⚔️</span>
-      <span class="mode-name">Дуэль 1vs1</span>
-      <span class="mode-desc">Поиск игрока · гонка до 3000</span>
-    </button>
   </div>
   <div id="theme-of-day" class="tod-banner">
     <span>🎁 Тема дня:</span> <b id="tod-name">—</b>
@@ -81,47 +48,12 @@
     <button id="open-achievements" class="ghost-btn">🏆 Достижения</button>
     <button id="open-quests" class="ghost-btn">📋 Квесты</button>
     <button id="open-leaderboard" class="ghost-btn">🏅 Топ</button>
-    <button id="open-season" class="ghost-btn">🎟️ Сезон</button>
     <button id="open-settings" class="ghost-btn">⚙️</button>
   </div>
   <div class="profile-bar">
     <span>Профиль <b id="profile-level">1</b></span>
     <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
     <span id="profile-xp">0 XP</span>
-  </div>
-</div>
-
-<!-- DUEL LOBBY -->
-<div id="duel-lobby-screen" class="screen">
-  <button class="back-btn" id="duel-lobby-back">← Назад</button>
-  <h1 class="screen-title">Дуэль 1vs1</h1>
-  <div class="duel-lobby-body">
-    <div class="online-badge" style="align-self:center;margin-bottom:12px">
-      <span class="online-dot"></span>
-      <span>Онлайн: <b id="online-count-lobby">0</b></span>
-    </div>
-    <button id="duel-quick" class="mode-card" style="width:100%;margin-bottom:12px">
-      <span class="mode-emoji">⚡</span>
-      <span class="mode-name">Быстрый матч</span>
-      <span class="mode-desc">Автопоиск соперника</span>
-    </button>
-    <div class="search-row">
-      <input type="text" id="player-search" placeholder="Поиск по нику..." maxlength="16">
-    </div>
-    <div id="players-list" class="list-scroll players-list"></div>
-    <p class="mode-sub" id="players-empty" style="display:none;margin-top:20px">Нет игроков онлайн</p>
-  </div>
-</div>
-
-<!-- CHALLENGE MODAL -->
-<div id="challenge-modal" class="modal" style="display:none">
-  <div class="modal-card">
-    <h2 id="challenge-title">Вызов!</h2>
-    <p id="challenge-text"></p>
-    <div class="modal-actions">
-      <button id="challenge-accept" class="mode-card" style="flex:1">Принять</button>
-      <button id="challenge-decline" class="ghost-btn" style="flex:1">Отклонить</button>
-    </div>
   </div>
 </div>
 
@@ -149,18 +81,11 @@
         <option value="mono">Моно</option>
       </select>
     </label>
-    <label class="set-row"><span>Задержка DAS</span>
+    <label class="set-row"><span>Скорость DAS</span>
       <select id="set-das">
         <option value="150">Быстро</option>
         <option value="250" selected>Норма</option>
         <option value="400">Медленно</option>
-      </select>
-    </label>
-    <label class="set-row"><span>Повтор ARR</span>
-      <select id="set-arr">
-        <option value="40">Быстро</option>
-        <option value="70" selected>Норма</option>
-        <option value="120">Медленно</option>
       </select>
     </label>
   </div>
@@ -181,15 +106,6 @@
   <div id="quests-list" class="list-scroll"></div>
 </div>
 
-
-<!-- SEASON PASS -->
-<div id="season-screen" class="screen">
-  <button class="back-btn" id="season-back">← Назад</button>
-  <h1 class="screen-title">Сезонный пропуск</h1>
-  <p class="quests-date">Награды за уровни профиля</p>
-  <div id="season-list" class="list-scroll"></div>
-</div>
-
 <!-- MAIN GAME -->
 <div id="game" class="screen">
   <header class="game-header">
@@ -197,7 +113,7 @@
     <div class="logo">TETRIS</div>
     <div class="online-badge" id="online-container">
       <span class="online-dot"></span>
-      <span>Онлайн: <b id="online-count">0</b></span>
+      <span id="online-count">0</span>
     </div>
   </header>
 
@@ -228,10 +144,6 @@
       <div class="stat-card" id="timer-card" style="display:none">
         <span class="stat-label">Время</span>
         <span class="stat-value" id="timer-val">0:00</span>
-      </div>
-      <div class="stat-card" id="duel-card" style="display:none">
-        <span class="stat-label">Соперник</span>
-        <span class="stat-value" id="duel-opp">—</span>
       </div>
       <button id="pause-btn" class="pause-btn" title="Пауза (P)">⏸</button>
     </aside>
@@ -897,11 +809,6 @@
 <!-- === Отображение количества игроков онлайн === -->
 <!-- === Основной скрипт игры === -->
 <script src="script.js"></script>
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
-}
-</script>
 </body>
 </html>
 
