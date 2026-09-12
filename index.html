@@ -7,35 +7,121 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Тетрис</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
 
+
+<!-- AUTH -->
+<div id="auth-screen" class="screen active-screen">
+  <div class="auth-card">
+    <div class="logo big">TETRIS</div>
+    <p class="mode-sub" id="auth-subtitle">вход в аккаунт</p>
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" data-tab="login">Вход</button>
+      <button type="button" class="auth-tab" data-tab="register">Регистрация</button>
+    </div>
+    <form id="auth-form" autocomplete="on">
+      <input type="text" id="auth-login" name="username" placeholder="Логин" required minlength="3" maxlength="16" autocomplete="username" enterkeyhint="next" />
+      <input type="password" id="auth-pass" name="password" placeholder="Пароль" required minlength="4" maxlength="32" autocomplete="current-password" enterkeyhint="done" />
+      <input type="password" id="auth-pass2" name="password2" placeholder="Повтор пароля" minlength="4" maxlength="32" style="display:none" autocomplete="new-password" />
+      <p id="auth-error" class="auth-error" hidden></p>
+      <button type="submit" id="auth-submit" class="primary-btn">Войти</button>
+      <button type="button" id="auth-guest" class="ghost-btn auth-guest-btn">Играть как гость</button>
+    </form>
+  </div>
+</div>
+
 <!-- MODE SELECT -->
-<div id="mode-screen" class="screen active-screen">
+<div id="mode-screen" class="screen">
+  <div class="user-bar" id="user-bar">
+    <span class="online-badge menu-online">
+      <span class="online-dot"></span>
+      <span class="online-count-menu">0</span> онлайн
+    </span>
+    <span id="user-name-display">Гость</span>
+    <button type="button" id="logout-btn" class="ghost-btn tiny">Выйти</button>
+  </div>
   <div class="mode-hero">
     <div class="logo big">TETRIS</div>
     <p class="mode-sub">выбери режим</p>
+    <div class="profile-bar center-profile" id="menu-profile">
+      <div class="profile-line">
+        <span>Уровень <b id="profile-level">1</b></span>
+        <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
+        <span id="profile-xp">0/25 XP</span>
+      </div>
+    </div>
   </div>
   <div class="mode-list">
     <button class="mode-card" data-mode="classic">
       <span class="mode-emoji">♾️</span>
       <span class="mode-name">Марафон</span>
-      <span class="mode-desc">Классика · уровни растут</span>
+      <span class="mode-desc">Классический режим игры</span>
     </button>
     <button class="mode-card" data-mode="sprint">
       <span class="mode-emoji">⚡</span>
-      <span class="mode-name">Спринт 40L</span>
-      <span class="mode-desc">Очисти 40 линий на время</span>
+      <span class="mode-name">Спринт</span>
+      <span class="mode-desc">Очистка 100 линий на время</span>
     </button>
-    <button class="mode-card" data-mode="zen">
-      <span class="mode-emoji">🧘</span>
-      <span class="mode-name">Дзен</span>
-      <span class="mode-desc">Без ускорения · спокойно</span>
+    <button class="mode-card" data-mode="duel">
+      <span class="mode-emoji">⚔️</span>
+      <span class="mode-name">Дуэль</span>
+      <span class="mode-desc">Гонка до 5000 очков</span>
     </button>
   </div>
   <div class="mode-footer">
-    <button id="open-achievements" class="ghost-btn">🏆 Достижения</button>
-    <button id="open-quests" class="ghost-btn">📋 Квесты</button>
+    <button id="open-achievements" class="ghost-btn menu-action-btn">🏆 Достижения</button>
+    <button id="open-quests" class="ghost-btn menu-action-btn">📋 Квесты</button>
+    <button id="open-settings" class="ghost-btn menu-action-btn">⚙️ Настройки</button>
+  </div>
+</div>
+
+<!-- LEADERBOARD -->
+<div id="leaderboard-screen" class="screen">
+  <button class="back-btn" id="lb-back">← Назад</button>
+  <h1 class="screen-title">Лидерборд</h1>
+  <div class="auth-tabs lb-tabs">
+    <button type="button" class="auth-tab active" data-lb="score">Очки игры</button>
+    <button type="button" class="auth-tab" data-lb="level">Уровень профиля</button>
+  </div>
+  <div id="leaderboard-list" class="list-scroll"></div>
+</div>
+
+<!-- SETTINGS -->
+<div id="settings-screen" class="screen">
+  <button class="back-btn" id="settings-back">← Назад</button>
+  <h1 class="screen-title">Настройки</h1>
+  <div class="settings-body">
+    <label class="set-row"><span>Звук</span><input type="checkbox" id="set-sound" checked></label>
+    <label class="set-row"><span>Вибрация</span><input type="checkbox" id="set-vibrate" checked></label>
+    <label class="set-row"><span>Призрачная фигура</span><input type="checkbox" id="set-ghost" checked></label>
+    <label class="set-row"><span>Сетка поля</span><input type="checkbox" id="set-grid" checked></label>
+    <label class="set-row"><span>Частицы</span><input type="checkbox" id="set-particles" checked></label>
+    <label class="set-row"><span>Скин блоков</span>
+      <select id="set-skin">
+        <option value="classic">Классика</option>
+        <option value="neon">Неон</option>
+        <option value="glass">Стекло</option>
+        <option value="pastel">Пастель</option>
+        <option value="mono">Моно</option>
+      </select>
+    </label>
+    <label class="set-row"><span>Задержка DAS</span>
+      <select id="set-das">
+        <option value="150">Быстро</option>
+        <option value="250" selected>Норма</option>
+        <option value="400">Медленно</option>
+      </select>
+    </label>
+    <label class="set-row"><span>Повтор ARR</span>
+      <select id="set-arr">
+        <option value="40">Быстро</option>
+        <option value="70" selected>Норма</option>
+        <option value="120">Медленно</option>
+      </select>
+    </label>
   </div>
 </div>
 
@@ -50,8 +136,33 @@
 <div id="quests-screen" class="screen">
   <button class="back-btn" id="quests-back">← Назад</button>
   <h1 class="screen-title">Ежедневные квесты</h1>
-  <p class="quests-date" id="quests-date"></p>
+  <!-- quests date removed -->
   <div id="quests-list" class="list-scroll"></div>
+</div>
+
+
+<!-- SEASON PASS -->
+<div id="season-screen" class="screen">
+  <button class="back-btn" id="season-back">← Назад</button>
+  <h1 class="screen-title">Сезонный пропуск</h1>
+  <p class="quests-date">Награды за уровни профиля</p>
+  <div id="season-list" class="list-scroll"></div>
+</div>
+
+
+<!-- DUEL LOBBY -->
+<div id="duel-lobby-screen" class="screen">
+  <button class="back-btn" id="duel-lobby-back">← Назад</button>
+  <h1 class="screen-title">Дуэль 1vs1</h1>
+  <div class="duel-search-wrap">
+    <input type="text" id="duel-search" placeholder="Поиск игрока по нику..." autocomplete="off" />
+    <button type="button" id="duel-refresh" class="ghost-btn">🔄</button>
+  </div>
+  <div id="duel-players-list" class="list-scroll"></div>
+  <div class="duel-lobby-actions">
+    <button type="button" id="duel-quick" class="primary-btn">⚡ Быстрый поиск</button>
+  </div>
+  <div id="duel-incoming" class="duel-incoming" style="display:none"></div>
 </div>
 
 <!-- MAIN GAME -->
@@ -59,10 +170,7 @@
   <header class="game-header">
     <button id="menu-btn" class="icon-chip" title="Меню">☰</button>
     <div class="logo">TETRIS</div>
-    <div class="online-badge" id="online-container">
-      <span class="online-dot"></span>
-      <span id="online-count">0</span>
-    </div>
+    <div class="header-spacer"></div>
   </header>
 
   <div class="game-layout">
@@ -92,6 +200,12 @@
       <div class="stat-card" id="timer-card" style="display:none">
         <span class="stat-label">Время</span>
         <span class="stat-value" id="timer-val">0:00</span>
+      </div>
+      <div class="stat-card" id="duel-card" style="display:none">
+        <span class="stat-label">Соперник</span>
+        <span class="stat-value duel-opp-score" id="duel-opp">0</span>
+        <span class="stat-label" style="margin-top:4px">До цели</span>
+        <span class="stat-value dim" id="duel-target-val">5000</span>
       </div>
       <button id="pause-btn" class="pause-btn" title="Пауза (P)">⏸</button>
     </aside>
@@ -139,11 +253,13 @@
 <div id="gameover-screen" class="screen">
   <div class="go-card">
     <div class="go-title" id="go-title">GAME OVER</div>
+    <p class="go-subtitle" id="go-subtitle" style="display:none"></p>
     <div class="go-stats">
       <div><span>Счёт</span><b id="go-score">0</b></div>
       <div><span>Линии</span><b id="go-lines">0</b></div>
       <div><span>Уровень</span><b id="go-level">1</b></div>
       <div id="go-time-row" style="display:none"><span>Время</span><b id="go-time">0:00</b></div>
+      <div id="go-duel-row" style="display:none"><span>Соперник</span><b id="go-duel-opp">0</b></div>
     </div>
     <div class="go-actions">
       <button id="go-retry" class="primary-btn">Ещё раз</button>
@@ -757,6 +873,11 @@
 <!-- === Отображение количества игроков онлайн === -->
 <!-- === Основной скрипт игры === -->
 <script src="script.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+</script>
 </body>
 </html>
 

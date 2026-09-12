@@ -13,8 +13,11 @@ if (holdCtx) holdCtx.imageSmoothingEnabled = false;
 
 // ===================== STATE =====================
 let score = 0;
-let highScore = parseInt(localStorage.getItem('tetrisHighScore') || '0', 10);
-let balance = parseInt(localStorage.getItem('tetrisBalance') || '0', 10);
+let highScore = 0;
+let balance = 0;
+try { localStorage.removeItem('tetrisSession'); } catch(e) {} // BOOT_CLEAR_SESSION
+// seasonClaimed declared above
+// caseAvailableAt declared above
 let level = 1;
 let linesCleared = 0;
 let dropInterval = 1000;
@@ -23,8 +26,8 @@ let dropCounter = 0;
 let paused = false;
 let gameOver = false;
 let combo = 0;
-let gameMode = 'classic'; // classic | sprint | zen
-let sprintTarget = 40;
+let gameMode = 'classic'; // classic | sprint | zen | hunger
+let sprintTarget = 100;
 let sprintStart = 0;
 let sprintElapsed = 0;
 let holdMatrix = null;
@@ -32,6 +35,162 @@ let holdLocked = false;
 let particles = [];
 let shakeTime = 0;
 let softDropping = false;
+let lastRotateWasKick = false;
+let hungerTimer = 0;
+let hungerInterval = 12000;
+let duelId = null;
+let duelOppScore = 0;
+let duelUnsub = null;
+let lineFlashRows = [];
+let lineFlashTime = 0;
+let currentUser = null; // { login, uid }
+let presenceRef = null;
+let dbRef = null;
+let firebaseReady = false;
+let inviteUnsub = null;
+function getDeviceId() {
+  let id = localStorage.getItem('tetrisDeviceId');
+  if (!id) {
+    id = 'd_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem('tetrisDeviceId', id);
+  }
+  return id;
+}
+function fbKey(s) {
+  return String(s || 'x').replace(/[.#$\[\]\/]/g, '_');
+}
+
+// Settings
+const settings = Object.assign({
+  sound: true, vibrate: true, ghost: true, skin: 'classic', das: 250
+}, JSON.parse(localStorage.getItem('tetrisSettings') || '{}'));
+
+function saveSettings() {
+  localStorage.setItem('tetrisSettings', JSON.stringify(settings));
+}
+
+// ===================== CLOUD USER DATA =====================
+function defaultUserData() {
+  return {
+    highScore: 0,
+    highScores: { classic: 0, sprint: 0, duel: 0 },
+    balance: 0,
+    bought: {},
+    stats: {
+      totalLines: 0, bestScore: 0, tetrises: 0, maxCombo: 0,
+      maxLevel: 1, sprints: 0, themesBought: 0, casesOpened: 0,
+      tspins: 0, hungerLines: 0, gamesPlayed: 0, duelWins: 0, unlocked: {}
+    },
+    quests: null,
+    seasonClaimed: {},
+    caseAvailableAt: 0,
+    updatedAt: Date.now()
+  };
+}
+
+let highScores = { classic: 0, sprint: 0, duel: 0 };
+
+function modeRecordKey(mode) {
+  if (mode === 'sprint') return 'sprint';
+  if (mode === 'duel') return 'duel';
+  return 'classic';
+}
+
+function getModeHigh(mode) {
+  const k = modeRecordKey(mode || gameMode);
+  return (highScores && highScores[k]) || 0;
+}
+
+function setModeHigh(mode, value) {
+  const k = modeRecordKey(mode || gameMode);
+  if (!highScores) highScores = { classic: 0, sprint: 0, duel: 0 };
+  highScores[k] = value;
+  if (k === 'classic') highScore = value; // legacy field
+}
+
+function applyUserData(data) {
+  // hard reset first so previous account never leaks
+  highScore = 0;
+  highScores = { classic: 0, sprint: 0, duel: 0 };
+  balance = 0;
+  themes.forEach(t => { bought[t] = false; active[t] = false; });
+  stats = defaultUserData().stats;
+  seasonClaimed = {};
+  caseAvailableAt = 0;
+  quests = {
+    date: todayKey(),
+    ver: 2,
+    items: QUEST_POOL.slice().sort(() => Math.random() - 0.5).slice(0, 10).map(q => ({ ...q, progress: 0, claimed: false }))
+  };
+
+  data = data || defaultUserData();
+  highScores = Object.assign({ classic: 0, sprint: 0, duel: 0 }, data.highScores || {});
+  // migrate old single highScore
+  if (data.highScore && !highScores.classic) highScores.classic = data.highScore;
+  highScore = highScores.classic || 0;
+  balance = data.balance || 0;
+  const b = data.bought || {};
+  themes.forEach(t => { bought[t] = !!b[t]; });
+  stats = Object.assign(defaultUserData().stats, data.stats || {});
+  if (!stats.unlocked) stats.unlocked = {};
+  seasonClaimed = data.seasonClaimed || {};
+  caseAvailableAt = data.caseAvailableAt || 0;
+  if (data.quests && data.quests.date === todayKey() && data.quests.items) {
+    quests = data.quests;
+  }
+  updateScore();
+  updateBalance();
+  updateProfileUI();
+  updateCaseTimer();
+  try { renderShop && renderShop(); } catch(e) {}
+}
+
+async function loadUserData(uid) {
+  if (!dbRef || !uid) {
+    applyUserData(defaultUserData());
+    return;
+  }
+  try {
+    const snap = await dbRef.ref('/userdata/' + fbKey(uid)).once('value');
+    const data = snap.val();
+    applyUserData(data || defaultUserData());
+  } catch (e) {
+    console.warn('loadUserData', e);
+    applyUserData(defaultUserData());
+  }
+}
+
+let _saveCloudTimer = null;
+function saveUserData() {
+  if (!currentUser || currentUser.guest || !dbRef) return;
+  const payload = {
+    highScore: highScores.classic || highScore || 0,
+    highScores: Object.assign({ classic: 0, sprint: 0, duel: 0 }, highScores),
+    balance,
+    bought: Object.assign({}, bought),
+    stats,
+    quests,
+    seasonClaimed,
+    caseAvailableAt,
+    updatedAt: Date.now()
+  };
+  // debounce writes
+  clearTimeout(_saveCloudTimer);
+  _saveCloudTimer = setTimeout(() => {
+    dbRef.ref('/userdata/' + fbKey(currentUser.uid)).set(payload).catch(e => console.warn('saveUserData', e));
+  }, 400);
+}
+
+
+
+const SKINS = {
+  classic: [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'],
+  neon:    [null, '#ff00aa', '#00f0ff', '#39ff14', '#bf00ff', '#ff6b00', '#ffff00', '#00a2ff'],
+  glass:   [null, '#f9a8d4', '#a5f3fc', '#bbf7d0', '#e9d5ff', '#fed7aa', '#fef08a', '#bfdbfe'],
+  pastel:  [null, '#f472b6', '#67e8f9', '#86efac', '#c4b5fd', '#fdba74', '#fde047', '#93c5fd'],
+  mono:    [null, '#e2e8f0', '#cbd5e1', '#94a3b8', '#f1f5f9', '#64748b', '#e2e8f0', '#cbd5e1'],
+};
+let colors = SKINS[settings.skin] || SKINS.classic;
 
 // ===================== THEMES =====================
 const themes = [
@@ -47,29 +206,52 @@ themes.forEach(t => { bought[t] = !!savedBought[t]; active[t] = false; });
 // ===================== ACHIEVEMENTS =====================
 const ACHIEVEMENTS = [
   { id: 'first_line', name: 'Первая линия', desc: 'Очисти 1 линию', check: s => s.totalLines >= 1 },
-  { id: 'lines_40', name: 'Спринтер', desc: 'Очисти 40 линий за всё время', check: s => s.totalLines >= 40 },
+  { id: 'lines_10', name: 'Разминка', desc: 'Очисти 10 линий', check: s => s.totalLines >= 10 },
+  { id: 'lines_40', name: 'Спринтер', desc: 'Очисти 40 линий', check: s => s.totalLines >= 40 },
+  { id: 'lines_100', name: 'Сотня', desc: 'Очисти 100 линий', check: s => s.totalLines >= 100 },
   { id: 'lines_200', name: 'Марафонец', desc: 'Очисти 200 линий', check: s => s.totalLines >= 200 },
+  { id: 'score_1k', name: '1K', desc: 'Набери 1000 очков за игру', check: s => s.bestScore >= 1000 },
   { id: 'score_5k', name: '5K', desc: 'Набери 5000 очков за игру', check: s => s.bestScore >= 5000 },
   { id: 'score_20k', name: '20K', desc: 'Набери 20000 очков за игру', check: s => s.bestScore >= 20000 },
   { id: 'tetris', name: 'Тетрис!', desc: 'Очисти 4 линии сразу', check: s => s.tetrises >= 1 },
+  { id: 'tetris5', name: 'Тетрис x5', desc: 'Сделай 5 тетрисов', check: s => s.tetrises >= 5 },
   { id: 'combo3', name: 'Комбо x3', desc: 'Сделай комбо x3', check: s => s.maxCombo >= 3 },
   { id: 'combo5', name: 'Комбо x5', desc: 'Сделай комбо x5', check: s => s.maxCombo >= 5 },
-  { id: 'level10', name: 'Уровень 10', desc: 'Достигни 10 уровня', check: s => s.maxLevel >= 10 },
-  { id: 'sprint_finish', name: 'Спринт пройден', desc: 'Пройди спринт 40L', check: s => s.sprints >= 1 },
+  { id: 'level5', name: 'Уровень 5', desc: 'Достигни 5 уровня в игре', check: s => s.maxLevel >= 5 },
+  { id: 'level10', name: 'Уровень 10', desc: 'Достигни 10 уровня в игре', check: s => s.maxLevel >= 10 },
+  { id: 'sprint_finish', name: 'Спринт пройден', desc: 'Пройди спринт 100L', check: s => s.sprints >= 1 },
   { id: 'buyer', name: 'Шопоголик', desc: 'Купи 3 темы', check: s => s.themesBought >= 3 },
-  { id: 'collector', name: 'Коллекционер', desc: 'Купи 10 тем', check: s => s.themesBought >= 10 },
   { id: 'case_open', name: 'Удача', desc: 'Открой кейс', check: s => s.casesOpened >= 1 },
+  { id: 'tspin', name: 'T-Spin', desc: 'Сделай T-Spin', check: s => (s.tspins || 0) >= 1 },
+  { id: 'profile_5', name: 'Профиль 5', desc: 'Профиль 5 уровня', check: s => profileLevel() >= 5 },
+  { id: 'duel_win', name: 'Дуэлянт', desc: 'Выиграй дуэль', check: s => (s.duelWins || 0) >= 1 },
 ];
 
-let stats = JSON.parse(localStorage.getItem('tetrisStats') || '{}');
-stats = Object.assign({
+let stats = {
   totalLines: 0, bestScore: 0, tetrises: 0, maxCombo: 0,
   maxLevel: 1, sprints: 0, themesBought: 0, casesOpened: 0,
-  unlocked: {}
-}, stats);
+  tspins: 0, hungerLines: 0, gamesPlayed: 0, duelWins: 0, unlocked: {}
+};
+
+function profileLevel() {
+  return Math.floor((stats.totalLines || 0) / 25) + 1;
+}
+function profileXP() {
+  return (stats.totalLines || 0) % 25;
+}
+function updateProfileUI() {
+  const lv = document.getElementById('profile-level');
+  const xp = document.getElementById('profile-xp');
+  const fill = document.getElementById('xp-fill');
+  const level = profileLevel();
+  const cur = profileXP();
+  if (lv) lv.textContent = level;
+  if (xp) xp.textContent = cur + '/25 XP';
+  if (fill) fill.style.width = (cur / 25 * 100) + '%';
+}
 
 function saveStats() {
-  localStorage.setItem('tetrisStats', JSON.stringify(stats));
+  saveUserData();
 }
 
 function checkAchievements() {
@@ -105,24 +287,23 @@ function todayKey() {
 }
 
 const QUEST_POOL = [
-  { id: 'q_lines10', name: 'Очисти 10 линий', target: 10, reward: 'lines', reward: 300 },
-  { id: 'q_lines25', name: 'Очисти 25 линий', target: 25, key: 'lines', reward: 600 },
+  { id: 'q_lines5', name: 'Очисти 5 линий', target: 5, key: 'lines', reward: 150 },
+  { id: 'q_lines10', name: 'Очисти 10 линий', target: 10, key: 'lines', reward: 300 },
+  { id: 'q_lines20', name: 'Очисти 20 линий', target: 20, key: 'lines', reward: 450 },
+  { id: 'q_lines40', name: 'Очисти 40 линий', target: 40, key: 'lines', reward: 800 },
+  { id: 'q_score1k', name: 'Набери 1000 очков', target: 1000, key: 'score', reward: 250 },
   { id: 'q_score2k', name: 'Набери 2000 очков', target: 2000, key: 'score', reward: 400 },
+  { id: 'q_score5k', name: 'Набери 5000 очков', target: 5000, key: 'score', reward: 700 },
   { id: 'q_tetris', name: 'Сделай 1 тетрис', target: 1, key: 'tetris', reward: 500 },
   { id: 'q_combo', name: 'Комбо x3', target: 3, key: 'combo', reward: 450 },
-  { id: 'q_play', name: 'Сыграй 3 партии', target: 3, key: 'games', reward: 350 },
+  { id: 'q_hold', name: 'Используй удержание 5 раз', target: 5, key: 'hold', reward: 350 },
 ];
 
-let quests = JSON.parse(localStorage.getItem('tetrisQuests') || 'null');
-if (!quests || quests.date !== todayKey()) {
-  // pick 3 random
-  const shuffled = QUEST_POOL.slice().sort(() => Math.random() - 0.5).slice(0, 3);
-  quests = {
-    date: todayKey(),
-    items: shuffled.map(q => ({ ...q, progress: 0, claimed: false }))
-  };
-  localStorage.setItem('tetrisQuests', JSON.stringify(quests));
-}
+let quests = {
+  date: todayKey(),
+  ver: 2,
+  items: QUEST_POOL.slice().sort(() => Math.random() - 0.5).slice(0, 10).map(q => ({ ...q, progress: 0, claimed: false }))
+};
 
 function questProgress(key, amount) {
   let changed = false;
@@ -136,13 +317,12 @@ function questProgress(key, amount) {
       }
     }
   });
-  if (changed) localStorage.setItem('tetrisQuests', JSON.stringify(quests));
+  if (changed) saveUserData();
 }
 
 function renderQuests() {
   const list = document.getElementById('quests-list');
-  const dateEl = document.getElementById('quests-date');
-  if (dateEl) dateEl.textContent = 'Сегодня · ' + quests.date;
+  // date hidden
   if (!list) return;
   list.innerHTML = quests.items.map((q, i) => {
     const ready = q.progress >= q.target;
@@ -164,7 +344,7 @@ function renderQuests() {
       q.claimed = true;
       balance += q.reward;
       updateBalance();
-      localStorage.setItem('tetrisQuests', JSON.stringify(quests));
+      saveUserData();
       toast('💎 +' + q.reward);
       renderQuests();
       sfx('coin');
@@ -182,6 +362,7 @@ function ensureAudio() {
 }
 
 function sfx(type) {
+  if (!settings.sound) return;
   ensureAudio();
   if (!audioCtx) return;
   const o = audioCtx.createOscillator();
@@ -225,11 +406,12 @@ function sfx(type) {
 }
 
 function vibrate(ms) {
+  if (!settings.vibrate) return;
   try { if (navigator.vibrate) navigator.vibrate(ms); } catch(e) {}
 }
 
 // ===================== TOAST =====================
-function toast(msg) {
+function toast(msg, opts) {
   let el = document.getElementById('toast');
   if (!el) {
     el = document.createElement('div');
@@ -239,7 +421,22 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove('show'), 2200);
+  if (opts && opts.sticky) {
+    el._sticky = true;
+    return el;
+  }
+  el._sticky = false;
+  el._t = setTimeout(() => {
+    if (!el._sticky) el.classList.remove('show');
+  }, (opts && opts.ms) || 2200);
+  return el;
+}
+function clearStickyToast() {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el._sticky = false;
+  clearTimeout(el._t);
+  el.classList.remove('show');
 }
 
 // ===================== DOM =====================
@@ -271,6 +468,33 @@ themes.slice(1).forEach(t => {
   }
 });
 
+
+// ===================== THEME OF THE DAY =====================
+function themeOfDay() {
+  const day = Math.floor(Date.now() / 86400000);
+  const list = themes.filter(t => t !== 'theme');
+  return list[day % list.length];
+}
+function setupThemeOfDay() {
+  if (!document.getElementById('theme-of-day')) return;
+  const tid = themeOfDay();
+  const nameEl = document.getElementById('tod-name');
+  if (nameEl) nameEl.textContent = tid;
+  document.getElementById('tod-apply')?.addEventListener('click', () => {
+    themes.forEach(x => active[x] = false);
+    active[tid] = true;
+    if (mellMusic) { mellMusic.pause(); mellMusic.currentTime = 0; }
+    Object.values(vids).forEach(v => { try { v.pause(); v.currentTime = 0; } catch(e){} });
+    const v = vids[tid];
+    if (v) {
+      if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
+      v.play().catch(() => {});
+    }
+    toast('Тема дня: ' + tid);
+    sfx('coin');
+  });
+}
+
 const mellBG = new Image();
 mellBG.src = 'https://avatars.mds.yandex.net/i?id=f929b30edd21b71bed35148895c13bd3_l-4531164-images-thumbs&n=13';
 
@@ -282,15 +506,33 @@ function updateScore() {
   const cv = document.getElementById('combo-val');
   const cc = document.getElementById('combo-card');
   if (sv) sv.textContent = score;
-  if (hv) hv.textContent = highScore;
+  const modeHi = getModeHigh(gameMode);
+  if (hv) hv.textContent = modeHi;
   if (lv) lv.textContent = level;
   if (ln) ln.textContent = linesCleared;
   if (cv) cv.textContent = 'x' + combo;
   if (cc) cc.style.display = combo > 1 ? '' : 'none';
-  if (score > highScore) {
-    highScore = score;
-    localStorage.setItem('tetrisHighScore', highScore);
-    if (hv) hv.textContent = highScore;
+  if (score > modeHi) {
+    setModeHigh(gameMode, score);
+    if (hv) hv.textContent = score;
+    saveUserData();
+  }
+  if (gameMode === 'duel') {
+    publishDuelScore();
+    if (score >= (settings.duelTarget || 5000) && !gameOver) {
+      // finish for both via room status
+      try {
+        if (dbRef && duelId && currentUser) {
+          const myId = fbKey(currentUser.uid);
+          dbRef.ref('/duelRooms/' + duelId).update({
+            status: 'finished',
+            winner: myId,
+            hostScore: null // filled in endGame
+          });
+        }
+      } catch(e) {}
+      endGame(true);
+    }
   }
 }
 
@@ -301,7 +543,7 @@ function updateBalance() {
 }
 
 function saveBought() {
-  localStorage.setItem('tetrisBought', JSON.stringify(bought));
+  saveUserData();
 }
 
 // ===================== SHOP BUY =====================
@@ -374,11 +616,15 @@ themes.forEach(t => {
 // ===================== SCREENS =====================
 function showScreen(el) {
   document.querySelectorAll('.screen').forEach(s => {
-    s.style.display = 'none';
     s.classList.remove('active-screen');
+    s.style.display = 'none';
+    s.style.opacity = '';
+    s.style.pointerEvents = '';
   });
   if (!el) return;
   el.style.display = 'flex';
+  el.style.opacity = '1';
+  el.style.pointerEvents = 'auto';
   el.classList.add('active-screen');
 }
 
@@ -399,21 +645,45 @@ document.getElementById('return')?.addEventListener('click', () => {
   paused = false;
 });
 document.getElementById('menu-btn')?.addEventListener('click', () => {
+  if (gameMode === 'duel' && !gameOver) {
+    toast('В дуэли нельзя выйти в меню');
+    return;
+  }
   paused = true;
   showScreen(modeScreen);
 });
 
-// Mode select
+// Mode select (delegation — надёжнее)
+function startModeFromCard(mode) {
+  if (mode === 'duel') {
+    openDuelLobby();
+    return;
+  }
+  gameMode = mode || 'classic';
+  ensureAudio();
+  try {
+    startGame();
+  } catch (err) {
+    console.error('startGame', err);
+    toast('Ошибка старта: ' + err.message);
+    return;
+  }
+  showScreen(gameDiv);
+  paused = false;
+  gameOver = false;
+  lastTime = performance.now();
+  dropCounter = 0;
+}
+document.querySelector('.mode-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.mode-card');
+  if (!btn) return;
+  e.preventDefault();
+  startModeFromCard(btn.getAttribute('data-mode') || 'classic');
+});
 document.querySelectorAll('.mode-card').forEach(btn => {
   btn.addEventListener('click', (e) => {
     e.preventDefault();
-    gameMode = btn.getAttribute('data-mode') || 'classic';
-    ensureAudio();
-    startGame();
-    showScreen(gameDiv);
-    // reset timing so first drop isn't instant
-    lastTime = performance.now();
-    dropCounter = 0;
+    startModeFromCard(btn.getAttribute('data-mode') || 'classic');
   });
 });
 
@@ -452,13 +722,256 @@ if (secretBtn) {
   closeSecret.addEventListener('click', () => { secretMenu.style.display = 'none'; });
 }
 
+
+
+// ===================== SEASON PASS =====================
+const SEASON_REWARDS = [
+  { level: 1, reward: 100, label: '100 💎' },
+  { level: 2, reward: 150, label: '150 💎' },
+  { level: 3, reward: 200, label: '200 💎' },
+  { level: 5, reward: 400, label: '400 💎' },
+  { level: 7, reward: 500, label: '500 💎' },
+  { level: 10, reward: 1000, label: '1000 💎 + титул' },
+  { level: 15, reward: 1500, label: '1500 💎' },
+  { level: 20, reward: 2500, label: '2500 💎 Легенда' },
+];
+// seasonClaimed global above
+
+function renderSeason() {
+  const list = document.getElementById('season-list');
+  if (!list) return;
+  const lvl = profileLevel();
+  list.innerHTML = SEASON_REWARDS.map(r => {
+    const claimed = !!seasonClaimed[r.level];
+    const ready = lvl >= r.level && !claimed;
+    return `<div class="list-item ${claimed ? 'done' : ready ? 'ready' : ''}">
+      <div class="li-icon">${claimed ? '✅' : ready ? '🎁' : '🔒'}</div>
+      <div class="li-body" style="flex:1">
+        <div class="li-name">Уровень ${r.level}</div>
+        <div class="li-desc">${r.label}${lvl >= r.level ? '' : ' · нужно ур. ' + r.level}</div>
+      </div>
+      <button class="quest-claim season-claim" data-lv="${r.level}" ${ready ? '' : 'disabled'}>
+        ${claimed ? '✓' : ready ? 'Забрать' : 'Ур.' + r.level}
+      </button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.season-claim').forEach(btn => {
+    btn.onclick = () => {
+      const lv = +btn.getAttribute('data-lv');
+      const r = SEASON_REWARDS.find(x => x.level === lv);
+      if (!r || seasonClaimed[lv] || profileLevel() < lv) return;
+      seasonClaimed[lv] = true;
+      saveUserData();
+      balance += r.reward;
+      updateBalance();
+      toast('🎟️ Сезон: +' + r.reward + ' 💎');
+      sfx('coin');
+      renderSeason();
+    };
+  });
+}
+
+// season removed from UI
+document.getElementById('season-back')?.addEventListener('click', () => showScreen(modeScreen));
+
+
+// Settings UI
+function bindSettings() {
+  const map = [
+    ['set-sound', 'sound', 'checked'],
+    ['set-vibrate', 'vibrate', 'checked'],
+    ['set-ghost', 'ghost', 'checked'],
+    ['set-grid', 'grid', 'checked'],
+    ['set-particles', 'particles', 'checked'],
+    ['set-skin', 'skin', 'value'],
+    ['set-das', 'das', 'value'],
+    ['set-arr', 'arr', 'value'],
+  ];
+  map.forEach(([id, key, prop]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (prop === 'checked') el.checked = !!settings[key];
+    else el.value = String(settings[key] ?? '');
+    el.addEventListener('change', () => {
+      if (prop === 'checked') settings[key] = el.checked;
+      else if (key === 'das' || key === 'arr' || key === 'duelTarget') settings[key] = +el.value;
+      else settings[key] = el.value;
+      if (key === 'skin') colors = SKINS[settings.skin] || SKINS.classic;
+      if (key === 'music' && !settings.music) {
+        try { if (mellMusic) mellMusic.pause(); Object.values(vids).forEach(v => v.pause()); } catch(e) {}
+      }
+      saveSettings();
+    });
+  });
+  colors = SKINS[settings.skin] || SKINS.classic;
+}
+document.getElementById('open-settings')?.addEventListener('click', () => {
+  showScreen(document.getElementById('settings-screen'));
+});
+document.getElementById('settings-back')?.addEventListener('click', () => showScreen(modeScreen));
+document.getElementById('open-leaderboard')?.addEventListener('click', () => {
+  renderLeaderboard();
+  showScreen(document.getElementById('leaderboard-screen'));
+});
+document.getElementById('lb-back')?.addEventListener('click', () => showScreen(modeScreen));
+
+function getPlayerName() {
+  let name = localStorage.getItem('tetrisName');
+  if (!name) {
+    name = 'Игрок' + Math.floor(Math.random() * 9000 + 1000);
+    localStorage.setItem('tetrisName', name);
+  }
+  return name;
+}
+
+function getLocalScores() {
+  try { return JSON.parse(localStorage.getItem('tetrisLocalScores') || '[]') || []; }
+  catch(e) { return []; }
+}
+
+function saveLocalScore(entry) {
+  let rows = getLocalScores();
+  rows.push(entry);
+  rows.sort((a, b) => (b.score || 0) - (a.score || 0));
+  rows = rows.slice(0, 30);
+  localStorage.setItem('tetrisLocalScores', JSON.stringify(rows));
+  return rows;
+}
+
+function submitScore(sc) {
+  if (!sc || sc <= 0) return;
+  const entry = { name: getPlayerName(), score: sc, mode: gameMode, ts: Date.now() };
+  saveLocalScore(entry);
+  try {
+    if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length) {
+      firebase.database().ref('/scores').push(entry);
+    }
+  } catch (e) { console.warn('submitScore firebase', e); }
+}
+
+function renderLeaderboardRows(rows, list, source) {
+  if (!rows.length) {
+    list.innerHTML = '<div class="list-item"><div class="li-desc">Пока пусто — сыграй партию!</div></div>';
+    return;
+  }
+  list.innerHTML = rows.slice(0, 20).map((r, i) =>
+    `<div class="list-item"><div class="li-icon">${i===0?'🥇':i===1?'🥈':i===2?'🥉':'#'+(i+1)}</div>
+    <div class="li-body"><div class="li-name">${r.name||'?'}</div>
+    <div class="li-desc">${r.score} · ${r.mode||''}</div></div></div>`
+  ).join('') + `<div class="list-item"><div class="li-desc" style="text-align:center;width:100%">Источник: ${source}</div></div>`;
+}
+
+let lbTab = 'score';
+
+function getLocalLevels() {
+  try { return JSON.parse(localStorage.getItem('tetrisLocalLevels') || '[]') || []; }
+  catch(e) { return []; }
+}
+
+function saveLocalLevel() {
+  if (!currentUser) return;
+  const name = settings.nickname || currentUser.login || getPlayerName();
+  const level = profileLevel();
+  let rows = getLocalLevels().filter(r => r.name !== name);
+  rows.push({ name, level, lines: stats.totalLines || 0, ts: Date.now() });
+  rows.sort((a,b) => (b.level||0) - (a.level||0) || (b.lines||0) - (a.lines||0));
+  rows = rows.slice(0, 30);
+  localStorage.setItem('tetrisLocalLevels', JSON.stringify(rows));
+  if (dbRef) {
+    try {
+      dbRef.ref('/levels/' + encodeURIComponent(name)).set({ name, level, lines: stats.totalLines || 0, ts: Date.now() });
+    } catch(e) {}
+  }
+}
+
+function demoPlayers() {
+  return [
+    { name: 'ProGamer', score: 42000, level: 12, mode: 'classic' },
+    { name: 'TetrisKing', score: 35500, level: 10, mode: 'sprint' },
+    { name: 'LineClear', score: 28000, level: 9, mode: 'classic' },
+    { name: 'ComboMaster', score: 21000, level: 8, mode: 'classic' },
+    { name: 'PixelDrop', score: 15000, level: 6, mode: 'sprint' },
+    { name: 'BlockNinja', score: 12000, level: 5, mode: 'classic' },
+    { name: 'StackAttack', score: 9000, level: 4, mode: 'classic' },
+    { name: 'SoftDrop', score: 6500, level: 3, mode: 'sprint' },
+  ];
+}
+
+function renderLeaderboard() {
+  const list = document.getElementById('leaderboard-list');
+  if (!list) return;
+  list.innerHTML = '<div class="list-item"><div class="li-desc">Загрузка...</div></div>';
+  saveLocalLevel();
+
+  if (lbTab === 'level') {
+    const local = getLocalLevels();
+    const demo = demoPlayers().map(d => ({ name: d.name, level: d.level, lines: d.level * 25 }));
+    let rows = local.concat(demo);
+    const loadCloud = dbRef
+      ? dbRef.ref('/levels').limitToLast(40).once('value').then(snap => {
+          snap.forEach(c => { const v = c.val(); if (v && v.name) rows.push(v); });
+        }).catch(() => {})
+      : Promise.resolve();
+    loadCloud.finally(() => {
+      const seen = new Set();
+      const uniq = [];
+      rows.sort((a,b) => (b.level||0) - (a.level||0) || (b.lines||0) - (a.lines||0));
+      for (const r of rows) {
+        const k = String(r.name||'').toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        uniq.push(r);
+        if (uniq.length >= 20) break;
+      }
+      list.innerHTML = uniq.map((r,i) =>
+        `<div class="list-item"><div class="li-icon">${i===0?'🥇':i===1?'🥈':i===2?'🥉':'#'+(i+1)}</div>
+        <div class="li-body"><div class="li-name">${r.name||'?'}</div>
+        <div class="li-desc">Ур. ${r.level||1} · ${r.lines||0} линий</div></div></div>`
+      ).join('') || '<div class="list-item"><div class="li-desc">Пусто</div></div>';
+    });
+    return;
+  }
+
+  // score tab
+  const local = getLocalScores();
+  const demo = demoPlayers().map(d => ({ name: d.name, score: d.score, mode: d.mode }));
+  let rows = local.concat(demo);
+  const loadCloud = (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length)
+    ? firebase.database().ref('/scores').limitToLast(50).once('value').then(snap => {
+        snap.forEach(c => { const v = c.val(); if (v && typeof v.score === 'number') rows.push(v); });
+      }).catch(() => {})
+    : Promise.resolve();
+  loadCloud.finally(() => {
+    const seen = new Set();
+    const uniq = [];
+    rows.sort((a,b) => (b.score||0) - (a.score||0));
+    for (const r of rows) {
+      const k = (r.name||'') + '|' + r.score;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(r);
+      if (uniq.length >= 20) break;
+    }
+    renderLeaderboardRows(uniq, list, 'игроки');
+  });
+}
+
+document.querySelectorAll('.lb-tabs .auth-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    lbTab = tab.getAttribute('data-lb') || 'score';
+    document.querySelectorAll('.lb-tabs .auth-tab').forEach(t => t.classList.toggle('active', t === tab));
+    renderLeaderboard();
+  });
+});
+
+
 // ===================== CASE =====================
 const caseBtn = document.getElementById('case-btn');
 const caseScreen = document.getElementById('case-screen');
 const returnCaseBtn = document.getElementById('return-case');
 const timerEl = document.getElementById('timer');
 const openCaseBtn = document.getElementById('open-case');
-let caseAvailableAt = parseInt(localStorage.getItem('tetrisCaseAt') || '0', 10) || (Date.now() + 5 * 60 * 1000);
+let caseAvailableAt = 0;
 const rewards = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000];
 
 caseBtn?.addEventListener('click', () => {
@@ -547,7 +1060,7 @@ openCaseBtn?.addEventListener('click', () => {
       saveStats();
       checkAchievements();
       caseAvailableAt = Date.now() + 5 * 60 * 1000;
-      localStorage.setItem('tetrisCaseAt', caseAvailableAt);
+      saveUserData();
       updateCaseTimer();
     };
     scroll.addEventListener('transitionend', handleTransitionEnd);
@@ -564,7 +1077,7 @@ function createMatrix(w, h) {
 const arena = createMatrix(12, 20);
 const player = { pos: { x: 0, y: 0 }, matrix: null, next: null };
 
-const colors = [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'];
+// colors from SKINS
 
 function collide(arena, p) {
   const [m, o] = [p.matrix, p.pos];
@@ -604,8 +1117,19 @@ function drawMatrix(matrix, offset, alpha = 1) {
         const dy = y + offset.y, dx = x + offset.x;
         if (dy >= 0 && dy < arena.length && dx >= 0 && dx < arena[0].length) {
           ctx.globalAlpha = alpha;
-          ctx.fillStyle = colors[val];
+          const c = colors[val] || colors[7] || '#888';
+          ctx.fillStyle = c;
           ctx.fillRect(dx, dy, 1, 1);
+          if (settings.skin === 'neon') {
+            ctx.strokeStyle = c;
+            ctx.lineWidth = 0.08;
+            ctx.globalAlpha = alpha * 0.5;
+            ctx.strokeRect(dx - 0.05, dy - 0.05, 1.1, 1.1);
+            ctx.globalAlpha = alpha;
+          } else if (settings.skin === 'glass') {
+            ctx.fillStyle = 'rgba(255,255,255,0.25)';
+            ctx.fillRect(dx, dy, 1, 0.35);
+          }
           ctx.strokeStyle = 'rgba(0,0,0,0.35)';
           ctx.lineWidth = 0.05;
           ctx.strokeRect(dx, dy, 1, 1);
@@ -691,7 +1215,7 @@ function draw() {
 
   // shake
   const boardWrap = document.getElementById('board-wrap');
-  if (shakeTime > 0 && boardWrap) {
+  if (settings.shake && shakeTime > 0 && boardWrap) {
     const s = Math.min(shakeTime, 200) / 100;
     boardWrap.style.transform = `translate(${(Math.random()-0.5)*s*4}px, ${(Math.random()-0.5)*s*4}px)`;
   } else if (boardWrap) {
@@ -724,18 +1248,27 @@ function draw() {
   ctx.setTransform(20, 0, 0, 20, 0, 0);
 
   // grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 0.03;
-  for (let x = 0; x <= 12; x++) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 20); ctx.stroke(); }
-  for (let y = 0; y <= 20; y++) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(12, y); ctx.stroke(); }
+  if (settings.grid) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 0.03;
+    for (let x = 0; x <= 12; x++) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 20); ctx.stroke(); }
+    for (let y = 0; y <= 20; y++) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(12, y); ctx.stroke(); }
+  }
 
   drawMatrix(arena, { x: 0, y: 0 });
-  if (player.matrix && !gameOver) {
+  // line clear flash
+  if (lineFlashTime > 0 && lineFlashRows.length) {
+    ctx.globalAlpha = Math.min(1, lineFlashTime / 180) * 0.7;
+    ctx.fillStyle = '#ffffff';
+    lineFlashRows.forEach(y => ctx.fillRect(0, y, 12, 1));
+    ctx.globalAlpha = 1;
+  }
+  if (settings.ghost && player.matrix && !gameOver) {
     const gy = getGhostY();
     if (gy >= 0) drawMatrix(player.matrix, { x: player.pos.x, y: gy }, 0.25);
   }
   if (player.matrix) drawMatrix(player.matrix, player.pos);
-  drawParticles();
+  if (settings.particles) drawParticles();
   drawNextPiece();
   drawHoldPiece();
 
@@ -771,15 +1304,27 @@ function arenaSweep() {
     const pointsTable = [0, 100, 300, 500, 800];
     let gained = (pointsTable[rowCount] || 800) * level;
     if (combo > 1) gained += 50 * combo * level;
+    // T-Spin bonus (checked before piece merges... we check on last rotate flag stored)
+    if (window._pendingTSpin) {
+      gained += 400 * level * rowCount;
+      stats.tspins = (stats.tspins || 0) + 1;
+      toast('T-SPIN! +' + (400 * level * rowCount));
+      window._pendingTSpin = false;
+      sfx('tetris');
+    }
     score += gained;
     balance += gained;
     linesCleared += rowCount;
     stats.totalLines += rowCount;
+    if (gameMode === 'hunger') stats.hungerLines = (stats.hungerLines || 0) + rowCount;
     questProgress('lines', rowCount);
     questProgress('score', gained);
     if (combo >= 3) questProgress('combo', combo);
+    updateProfileUI();
 
-    clearedYs.forEach(y => spawnParticles(y, 18));
+    if (settings.particles) clearedYs.forEach(y => spawnParticles(y, 18));
+    lineFlashRows = clearedYs.slice();
+    lineFlashTime = 180;
     if (rowCount >= 4) {
       stats.tetrises = (stats.tetrises || 0) + 1;
       questProgress('tetris', 1);
@@ -846,6 +1391,7 @@ function playerDrop() {
   player.pos.y++;
   if (collide(arena, player)) {
     player.pos.y--;
+    window._pendingTSpin = checkTSpin();
     merge(arena, player);
     arenaSweep();
     playerReset();
@@ -863,6 +1409,7 @@ function playerHardDrop() {
   while (!collide(arena, player)) { player.pos.y++; dist++; }
   player.pos.y--;
   dist--;
+  window._pendingTSpin = checkTSpin();
   merge(arena, player);
   arenaSweep();
   playerReset();
@@ -881,26 +1428,103 @@ function playerMove(dir) {
 }
 
 function playerRotate(dir) {
-  if (paused || gameOver) return;
+  if (paused || gameOver || !player.matrix) return;
   const pos = player.pos.x;
-  let offset = 1;
+  const py = player.pos.y;
   rotate(player.matrix, dir);
-  // improved wall kicks
   const kicks = [0, 1, -1, 2, -2];
   let ok = false;
+  let usedKick = false;
   for (const k of kicks) {
     player.pos.x = pos + k;
-    if (!collide(arena, player)) { ok = true; break; }
+    if (!collide(arena, player)) {
+      ok = true;
+      usedKick = k !== 0;
+      break;
+    }
+  }
+  if (!ok) {
+    // try small vertical kicks
+    for (const ky of [-1, 1]) {
+      for (const k of [0, 1, -1]) {
+        player.pos.x = pos + k;
+        player.pos.y = py + ky;
+        if (!collide(arena, player)) {
+          ok = true; usedKick = true; break;
+        }
+      }
+      if (ok) break;
+    }
   }
   if (!ok) {
     rotate(player.matrix, -dir);
     player.pos.x = pos;
+    player.pos.y = py;
     return;
   }
+  lastRotateWasKick = usedKick;
   sfx('rotate');
 }
 
+function isTPiece(m) {
+  if (!m || m.length < 2) return false;
+  // T shape has 4 cells in T configuration
+  let cells = 0;
+  m.forEach(r => r.forEach(v => { if (v === 1) cells++; }));
+  return cells === 4 || (m.some(r => r.includes(1)) && cells >= 3);
+}
+
+function checkTSpin() {
+  if (!player.matrix) return false;
+  // crude T-spin: last move was rotate and 3+ corners blocked around center
+  let hasT = false;
+  player.matrix.forEach(r => r.forEach(v => { if (v === 1) hasT = true; }));
+  if (!hasT) return false;
+  const cx = player.pos.x + 1, cy = player.pos.y + 1;
+  const corners = [[cx-1,cy-1],[cx+1,cy-1],[cx-1,cy+1],[cx+1,cy+1]];
+  let blocked = 0;
+  corners.forEach(([x,y]) => {
+    if (y < 0 || y >= arena.length || x < 0 || x >= arena[0].length || arena[y][x] !== 0) blocked++;
+  });
+  return blocked >= 3 && lastRotateWasKick;
+}
+
+function addGarbage(n) {
+  for (let i = 0; i < n; i++) {
+    const hole = (Math.random() * 12) | 0;
+    const row = new Array(12).fill(8); // color 8 will map - need color
+    // use color index 7 as garbage look
+    for (let x = 0; x < 12; x++) row[x] = x === hole ? 0 : 7;
+    arena.shift();
+    arena.push(row);
+  }
+  // if player collides after garbage, push up or end
+  if (player.matrix && collide(arena, player)) {
+    player.pos.y--;
+    if (collide(arena, player)) {
+      if (gameMode === 'duel' && dbRef && duelId && currentUser) {
+        try {
+          const myId = fbKey(currentUser.uid);
+          dbRef.ref('/duelRooms/' + duelId).once('value').then(s => {
+            const v = s.val() || {};
+            const isHost = String(v.host) === myId;
+            dbRef.ref('/duelRooms/' + duelId).update({
+              status: 'finished',
+              winner: isHost ? v.guest : v.host,
+              hostScore: isHost ? score : (v.hostScore || 0),
+              guestScore: isHost ? (v.guestScore || 0) : score,
+              ts: Date.now()
+            });
+          });
+        } catch(e) {}
+      }
+      endGame(false);
+    }
+  }
+}
+
 function playerHold() {
+  try { questProgress('hold', 1); } catch(e) {}
   if (paused || gameOver || holdLocked) return;
   const current = player.matrix;
   if (holdMatrix) {
@@ -930,6 +1554,123 @@ function formatTime(ms) {
   return m + ':' + String(ss).padStart(2, '0');
 }
 
+
+// ===================== DUEL =====================
+function stopDuel() {
+  if (duelUnsub) { try { duelUnsub(); } catch(e) {} duelUnsub = null; }
+  if (duelId) {
+    try {
+      if (typeof firebase !== 'undefined') {
+        firebase.database().ref('/duels/' + duelId).off();
+        // leave room after short delay so opponent sees final score
+      }
+    } catch(e) {}
+  }
+  duelId = null;
+  duelOppScore = 0;
+  const dc = document.getElementById('duel-card');
+  if (dc) dc.style.display = 'none';
+}
+
+function startDuelMatchmaking() {
+  if (typeof firebase === 'undefined') {
+    toast('Дуэль недоступна офлайн');
+    gameMode = 'classic';
+    return false;
+  }
+  try {
+    const db = firebase.database();
+    const waiting = db.ref('/duelWaiting');
+    // try join existing
+    // Simplified: create unique duel id from two random players via push
+    const myId = localStorage.getItem('tetrisDuelId') || Math.random().toString(36).slice(2);
+    localStorage.setItem('tetrisDuelId', myId);
+    const name = localStorage.getItem('tetrisName') || ('Игрок' + Math.floor(Math.random()*9000+1000));
+    localStorage.setItem('tetrisName', name);
+
+    // Look for open room
+    waiting.once('value', snap => {
+      let joined = false;
+      snap.forEach(child => {
+        if (joined) return;
+        const v = child.val();
+        if (v && v.status === 'waiting' && v.host !== myId) {
+          joined = true;
+          duelId = child.key;
+          child.ref.update({ status: 'active', guest: myId, guestName: name, guestScore: 0 });
+          toast('⚔️ Соперник найден!');
+          listenDuel();
+        }
+      });
+      if (!joined) {
+        const ref = waiting.push({
+          host: myId, hostName: name, hostScore: 0, guestScore: 0,
+          status: 'waiting', ts: Date.now()
+        });
+        duelId = ref.key;
+        toast('⚔️ Поиск соперника...');
+        // wait for guest
+        ref.on('value', s => {
+          const v = s.val();
+          if (!v) return;
+          if (v.status === 'active') {
+            toast('⚔️ Соперник подключился!');
+            listenDuel();
+          }
+        });
+        // timeout 20s -> solo practice vs ghost target
+        setTimeout(() => {
+          if (gameMode === 'duel' && duelOppScore === 0) {
+            toast('Играем против цели 5000');
+          }
+        }, 20000);
+      }
+    });
+    return true;
+  } catch(e) {
+    toast('Дуэль: ошибка сети');
+    return false;
+  }
+}
+
+function listenDuel() {
+  if (!duelId || typeof firebase === 'undefined') return;
+  const ref = firebase.database().ref('/duelWaiting/' + duelId);
+  const handler = s => {
+    const v = s.val();
+    if (!v) return;
+    const myId = localStorage.getItem('tetrisDuelId');
+    if (v.host === myId) {
+      duelOppScore = v.guestScore || 0;
+    } else {
+      duelOppScore = v.hostScore || 0;
+    }
+    const el = document.getElementById('duel-opp');
+    if (el) el.textContent = duelOppScore;
+    // win/lose check
+    if (duelOppScore >= (settings.duelTarget || 5000) && score < (settings.duelTarget || 5000) && !gameOver) {
+      endGame(false);
+      toast('Поражение в дуэли');
+    }
+  };
+  ref.on('value', handler);
+  duelUnsub = () => ref.off('value', handler);
+}
+
+function publishDuelScore() {
+  if (gameMode !== 'duel' || !duelId || !dbRef || !currentUser) return;
+  try {
+    const myId = fbKey(currentUser.uid);
+    const ref = dbRef.ref('/duelRooms/' + duelId);
+    ref.once('value').then(s => {
+      const v = s.val();
+      if (!v) return;
+      if (String(v.host) === myId) ref.update({ hostScore: score, ts: Date.now() });
+      else if (String(v.guest) === myId) ref.update({ guestScore: score, ts: Date.now() });
+    });
+  } catch(e) { console.warn('publishDuel', e); }
+}
+
 function startGame() {
   arena.forEach(r => r.fill(0));
   score = 0; level = 1; linesCleared = 0; combo = 0;
@@ -937,6 +1678,11 @@ function startGame() {
   gameOver = false; paused = false;
   holdMatrix = null; holdLocked = false;
   particles = []; shakeTime = 0;
+  hungerTimer = 0; hungerInterval = 12000;
+  lastRotateWasKick = false;
+  lineFlashRows = []; lineFlashTime = 0;
+  // do not clear active duel room mid-start
+  if (!(gameMode === 'duel' && duelId)) stopDuel();
   player.next = randomPiece();
   player.matrix = null;
   playerReset();
@@ -946,6 +1692,7 @@ function startGame() {
   }
   updateScore();
   const tc = document.getElementById('timer-card');
+  const dc = document.getElementById('duel-card');
   if (gameMode === 'sprint') {
     sprintStart = performance.now();
     sprintElapsed = 0;
@@ -953,24 +1700,104 @@ function startGame() {
   } else {
     if (tc) tc.style.display = 'none';
   }
+  if (gameMode === 'duel') {
+    if (dc) dc.style.display = '';
+    const el = document.getElementById('duel-opp');
+    if (el) el.textContent = String(duelOppScore || 0);
+    const dt = document.getElementById('duel-target-val');
+    if (dt) dt.textContent = String(settings.duelTarget || 5000);
+  } else {
+    if (dc) dc.style.display = 'none';
+  }
   questProgress('games', 1);
+  stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
+  saveStats();
+  checkAchievements();
 }
 
 function endGame(won) {
   gameOver = true;
   paused = true;
-  sfx('gameover');
+  if (window._botTimer) { clearInterval(window._botTimer); window._botTimer = null; }
+  publishDuelScore();
+  sfx(won ? 'tetris' : 'gameover');
   if (score > stats.bestScore) { stats.bestScore = score; saveStats(); }
   checkAchievements();
-  document.getElementById('go-title').textContent = won ? 'СПРИНТ ПРОЙДЕН!' : 'GAME OVER';
+
+  const titleEl = document.getElementById('go-title');
+  const subEl = document.getElementById('go-subtitle');
+  const duelRow = document.getElementById('go-duel-row');
+  const retryBtn = document.getElementById('go-retry');
+  const tr = document.getElementById('go-time-row');
+
+  if (gameMode === 'duel') {
+    const target = settings.duelTarget || 5000;
+    let youWon = false;
+    if (score >= target) youWon = true;
+    else if (duelOppScore >= target) youWon = false;
+    else youWon = !!won; // top-out: caller passes false for loser
+
+    if (youWon) {
+      stats.duelWins = (stats.duelWins || 0) + 1;
+      saveStats();
+      checkAchievements();
+      if (titleEl) titleEl.textContent = 'ПОБЕДА';
+      if (subEl) {
+        subEl.style.display = '';
+        subEl.textContent = 'Ты победил · соперник проиграл';
+      }
+    } else {
+      if (titleEl) titleEl.textContent = 'ПОРАЖЕНИЕ';
+      if (subEl) {
+        subEl.style.display = '';
+        subEl.textContent = 'Ты проиграл · соперник победил';
+      }
+    }
+    if (duelRow) {
+      duelRow.style.display = '';
+      const oppEl = document.getElementById('go-duel-opp');
+      if (oppEl) oppEl.textContent = String(duelOppScore || 0);
+    }
+    if (retryBtn) retryBtn.style.display = 'none';
+    if (tr) tr.style.display = 'none';
+    try {
+      if (dbRef && duelId && currentUser) {
+        const myId = fbKey(currentUser.uid);
+        const ref = dbRef.ref('/duelRooms/' + duelId);
+        ref.once('value').then(s => {
+          const v = s.val() || {};
+          if (v.status === 'finished') return;
+          const isHost = String(v.host) === myId;
+          ref.update({
+            status: 'finished',
+            winner: youWon ? myId : (isHost ? v.guest : v.host),
+            hostScore: isHost ? score : (v.hostScore || duelOppScore),
+            guestScore: isHost ? (v.guestScore || duelOppScore) : score,
+            ts: Date.now()
+          });
+        });
+      }
+    } catch (e) {}
+  } else {
+    if (subEl) { subEl.style.display = 'none'; subEl.textContent = ''; }
+    if (duelRow) duelRow.style.display = 'none';
+    if (retryBtn) retryBtn.style.display = '';
+    if (won) {
+      if (titleEl) titleEl.textContent = gameMode === 'sprint' ? 'СПРИНТ ПРОЙДЕН!' : 'ПОБЕДА!';
+    } else {
+      if (titleEl) titleEl.textContent = 'GAME OVER';
+    }
+    if (gameMode === 'sprint' && tr) {
+      tr.style.display = '';
+      const gt = document.getElementById('go-time');
+      if (gt) gt.textContent = formatTime(sprintElapsed);
+    } else if (tr) tr.style.display = 'none';
+  }
+
   document.getElementById('go-score').textContent = score;
   document.getElementById('go-lines').textContent = linesCleared;
   document.getElementById('go-level').textContent = level;
-  const tr = document.getElementById('go-time-row');
-  if (gameMode === 'sprint') {
-    tr.style.display = '';
-    document.getElementById('go-time').textContent = formatTime(sprintElapsed);
-  } else tr.style.display = 'none';
+  submitScore(score);
   showScreen(goScreen);
 }
 
@@ -1017,8 +1844,19 @@ function update(time = 0) {
       const tv = document.getElementById('timer-val');
       if (tv) tv.textContent = formatTime(sprintElapsed);
     }
+    if (gameMode === 'hunger') {
+      hungerTimer += delta;
+      if (hungerTimer >= hungerInterval) {
+        hungerTimer = 0;
+        addGarbage(1);
+        // speed up garbage over time
+        hungerInterval = Math.max(4000, hungerInterval - 200);
+        sfx('drop');
+      }
+    }
   }
   if (shakeTime > 0) shakeTime -= delta;
+  if (lineFlashTime > 0) lineFlashTime -= delta;
   updateParticles(delta);
   draw();
   requestAnimationFrame(update);
@@ -1028,23 +1866,37 @@ function update(time = 0) {
 ['left','right','down','rotate'].forEach(id => {
   const btn = document.getElementById(id);
   if (!btn) return;
-  let iv;
+  let iv, delayT;
   const action = () => {
     if (id === 'left') playerMove(-1);
     if (id === 'right') playerMove(1);
     if (id === 'down') { softDropping = true; playerDrop(); }
     if (id === 'rotate') playerRotate(1);
   };
-  btn.addEventListener('mousedown', () => { action(); iv = setInterval(action, 90); });
-  btn.addEventListener('mouseup', () => { clearInterval(iv); softDropping = false; });
-  btn.addEventListener('mouseleave', () => { clearInterval(iv); softDropping = false; });
-  btn.addEventListener('touchstart', e => { e.preventDefault(); action(); iv = setInterval(action, 90); }, { passive: false });
-  btn.addEventListener('touchend', e => { e.preventDefault(); clearInterval(iv); softDropping = false; }, { passive: false });
+  const startRepeat = () => {
+    action();
+    clearTimeout(delayT); clearInterval(iv);
+    delayT = setTimeout(() => {
+      iv = setInterval(action, settings.arr || 70);
+    }, settings.das || 250);
+  };
+  const stopRepeat = () => {
+    clearTimeout(delayT); clearInterval(iv); softDropping = false;
+  };
+  btn.addEventListener('mousedown', startRepeat);
+  btn.addEventListener('mouseup', stopRepeat);
+  btn.addEventListener('mouseleave', stopRepeat);
+  btn.addEventListener('touchstart', e => { e.preventDefault(); startRepeat(); }, { passive: false });
+  btn.addEventListener('touchend', e => { e.preventDefault(); stopRepeat(); }, { passive: false });
 });
 
 document.getElementById('hard-drop')?.addEventListener('click', () => playerHardDrop());
 document.getElementById('hold-btn')?.addEventListener('click', () => playerHold());
 document.getElementById('pause-btn')?.addEventListener('click', () => {
+  if (gameMode === 'duel') {
+    toast('В дуэли пауза недоступна');
+    return;
+  }
   if (!gameOver && gameDiv.style.display !== 'none') paused = !paused;
 });
 
@@ -1093,34 +1945,877 @@ document.addEventListener('keyup', e => {
   }, { passive: true });
 })();
 
+// ===================== AUTH + FIREBASE =====================
+const firebaseConfig = {
+  apiKey: "AIzaSyB1N9wwPZh1vQkIt-V7by8FW-7xoZobsDg",
+  authDomain: "tetris2-71bfa.firebaseapp.com",
+  databaseURL: "https://tetris2-71bfa-default-rtdb.firebaseio.com",
+  projectId: "tetris2-71bfa",
+  storageBucket: "tetris2-71bfa.appspot.com",
+  messagingSenderId: "38355194193",
+  appId: "1:38355194193:web:93229f575c86111a8f7af0"
+};
+
+function hashPassSync(pass) {
+  // Works on mobile file:// without crypto.subtle
+  let h1 = 5381, h2 = 52711;
+  const s = 'tetris:v2:' + String(pass);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 << 5) + h1) ^ c;
+    h2 = ((h2 << 5) + h2) + c;
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+async function hashPass(pass) {
+  try {
+    if (window.crypto && crypto.subtle && window.isSecureContext) {
+      const data = new TextEncoder().encode('tetris:' + pass);
+      const buf = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch (e) {}
+  return hashPassSync(pass);
+}
+
+function sanitizeLogin(login) {
+  return String(login || '').trim().replace(/\s+/g, '_').slice(0, 16);
+}
+
+function updateOnlineUI(n) {
+  document.querySelectorAll('.online-count-menu').forEach(el => {
+    el.textContent = String(n);
+  });
+}
+
+function updateUserBar() {
+  const nameEl = document.getElementById('user-name-display');
+  if (nameEl) nameEl.textContent = currentUser ? currentUser.login : 'Гость';
+}
+
+function clearPresenceNow() {
+  try {
+    if (window._presenceBeat) {
+      clearInterval(window._presenceBeat);
+      window._presenceBeat = null;
+    }
+    if (presenceRef) {
+      try { presenceRef.onDisconnect().cancel(); } catch (e) {}
+      // remove immediately so others see count drop now
+      presenceRef.remove();
+      presenceRef = null;
+    }
+  } catch (e) {}
+}
+
+function setPresence(status) {
+  if (!presenceRef || !currentUser) return;
+  try {
+    presenceRef.set({
+      login: currentUser.login,
+      uid: fbKey(currentUser.uid),
+      status: status || 'online',
+      ts: Date.now()
+    });
+  } catch (e) {}
+}
+
+function startPresence() {
+  if (!dbRef || !currentUser) return;
+  try {
+    clearPresenceNow();
+    const key = String(currentUser.uid || currentUser.login).replace(/[.#$\[\]]/g, '_');
+    presenceRef = dbRef.ref('/presence/' + key);
+    // server removes node as soon as connection drops
+    presenceRef.onDisconnect().remove();
+    setPresence('online');
+    if (window._presenceBeat) clearInterval(window._presenceBeat);
+    window._presenceBeat = setInterval(() => {
+      setPresence(gameMode === 'duel' && !paused ? 'in_game' : 'online');
+    }, 10000);
+  } catch (e) { console.warn('presence', e); }
+}
+
+// leave immediately on tab close / hide / refresh
+function forceLogoutSession(reason) {
+  try { clearPresenceNow(); } catch(e) {}
+  try {
+    if (dbRef && currentUser && !currentUser.guest) {
+      dbRef.ref('/sessions/' + fbKey(currentUser.uid)).remove();
+    }
+  } catch(e) {}
+  if (window._sessionUnsub) { try { window._sessionUnsub(); } catch(e) {} }
+  if (window._sessionBeat) clearInterval(window._sessionBeat);
+  if (inviteUnsub) { try { inviteUnsub(); } catch(e) {} }
+  currentUser = null;
+  localStorage.removeItem('tetrisSession');
+  applyUserData(defaultUserData());
+  updateUserBar();
+  updateOnlineUI(0);
+  clearStickyToast();
+  // leave game
+  paused = true;
+  gameOver = true;
+  showScreen(document.getElementById('auth-screen'));
+}
+
+function bindPresenceUnload() {
+  if (window._presenceUnloadBound) return;
+  window._presenceUnloadBound = true;
+  const leave = () => {
+    try {
+      if (presenceRef) {
+        presenceRef.onDisconnect().cancel();
+        presenceRef.remove();
+      }
+    } catch (e) {}
+    // require re-login after close / refresh
+    try { localStorage.removeItem('tetrisSession'); } catch(e) {}
+  };
+  window.addEventListener('pagehide', leave);
+  window.addEventListener('beforeunload', leave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      // switching tab / minimizing → logout
+      if (currentUser) forceLogoutSession('hidden');
+    }
+  });
+}
+
+function listenOnlineCount() {
+  if (window._onlineListening) return;
+  if (!dbRef) {
+    updateOnlineUI(currentUser ? 1 : 0);
+    return;
+  }
+  window._onlineListening = true;
+  const STALE_MS = 20000; // backup if onDisconnect failed
+  try {
+    dbRef.ref('/presence').on('value', snap => {
+      let n = 0;
+      const now = Date.now();
+      const seen = new Set();
+      snap.forEach(c => {
+        const v = c.val();
+        if (!v || typeof v !== 'object') return;
+        const ts = v.ts || 0;
+        if (!ts || now - ts > STALE_MS) {
+          try { c.ref.remove(); } catch (e) {}
+          return;
+        }
+        const id = String(v.uid || c.key);
+        if (seen.has(id)) return;
+        seen.add(id);
+        n++;
+      });
+      updateOnlineUI(n);
+    }, err => {
+      console.warn('online', err);
+      updateOnlineUI(currentUser ? 1 : 0);
+      window._onlineListening = false;
+    });
+  } catch (e) {
+    console.warn('online listen', e);
+    updateOnlineUI(currentUser ? 1 : 0);
+    window._onlineListening = false;
+  }
+}
+
+function listenInvites() {
+  if (!dbRef || !currentUser || currentUser.guest) return;
+  try {
+    if (inviteUnsub) { try { inviteUnsub(); } catch(e) {} }
+    const myId = fbKey(currentUser.uid);
+    const ref = dbRef.ref('/duelInvites/' + myId);
+    const handler = snap => {
+      const box = ensureInviteBox();
+      let html = '';
+      snap.forEach(c => {
+        const v = c.val();
+        if (!v || v.status !== 'pending') return;
+        const from = c.key;
+        html += `<div>
+          <b>${v.fromName || 'Игрок'}</b> вызывает на дуэль
+          <div class="inv-actions">
+            <button type="button" class="btn-accept" data-from="${from}" data-name="${(v.fromName||'').replace(/"/g,'')}">Принять</button>
+            <button type="button" class="btn-decline" data-from="${from}">Отклонить</button>
+          </div>
+        </div>`;
+      });
+      if (html) {
+        box.innerHTML = html;
+        box.style.display = 'block';
+        box.querySelectorAll('.btn-accept').forEach(btn => {
+          btn.onclick = () => acceptInvite(btn.getAttribute('data-from'), btn.getAttribute('data-name'));
+        });
+        box.querySelectorAll('.btn-decline').forEach(btn => {
+          btn.onclick = () => declineInvite(btn.getAttribute('data-from'));
+        });
+      } else {
+        box.style.display = 'none';
+        box.innerHTML = '';
+      }
+    };
+    ref.on('value', handler);
+    inviteUnsub = () => ref.off('value', handler);
+  } catch (e) { console.warn('invites', e); }
+}
+
+async function registerUser(login, pass) {
+  login = sanitizeLogin(login);
+  if (login.length < 3) throw new Error('Логин минимум 3 символа');
+  if (pass.length < 4) throw new Error('Пароль минимум 4 символа');
+  if (!dbRef) throw new Error('Нужен интернет для регистрации');
+  const hash = await hashPass(pass);
+  const key = login.toLowerCase();
+  const uid = 'u_' + fbKey(key);
+  const userRef = dbRef.ref('/accounts/' + fbKey(key));
+  const snap = await userRef.once('value');
+  if (snap.exists()) throw new Error('Логин уже занят');
+  await userRef.set({ hash, uid, login, created: Date.now() });
+  // empty cloud profile
+  await dbRef.ref('/userdata/' + fbKey(uid)).set({
+    highScore: 0, balance: 0, bought: {}, stats: {
+      totalLines: 0, bestScore: 0, tetrises: 0, maxCombo: 0,
+      maxLevel: 1, sprints: 0, themesBought: 0, casesOpened: 0,
+      tspins: 0, gamesPlayed: 0, duelWins: 0, unlocked: {}
+    }, quests: null, seasonClaimed: {}, caseAvailableAt: 0, updatedAt: Date.now()
+  });
+  return { login, uid, guest: false };
+}
+
+async function loginUser(login, pass) {
+  login = sanitizeLogin(login);
+  if (!login || !pass) throw new Error('Введите логин и пароль');
+  if (!dbRef) throw new Error('Нужен интернет для входа');
+  const hash = await hashPass(pass);
+  const key = login.toLowerCase();
+  const snap = await dbRef.ref('/accounts/' + fbKey(key)).once('value');
+  const data = snap.val();
+  if (!data) throw new Error('Аккаунт не зарегистрирован');
+  if (data.hash !== hash) throw new Error('Неверный логин или пароль');
+  const user = { login: data.login || login, uid: data.uid || ('u_' + fbKey(key)), guest: false };
+
+  const deviceId = getDeviceId();
+  const sessRef = dbRef.ref('/sessions/' + fbKey(user.uid));
+  const sess = await sessRef.once('value');
+  const s = sess.val();
+  const now = Date.now();
+  if (s && s.deviceId && s.deviceId !== deviceId && s.ts && now - s.ts < 120000) {
+    throw new Error('Аккаунт уже используется на другом устройстве');
+  }
+  await sessRef.set({ deviceId, login: user.login, ts: now });
+  sessRef.onDisconnect().remove();
+  return user;
+}
+
+function watchSessionKick() {
+  if (!dbRef || !currentUser || currentUser.guest) return;
+  try {
+    if (window._sessionUnsub) { try { window._sessionUnsub(); } catch(e) {} }
+    const deviceId = getDeviceId();
+    const ref = dbRef.ref('/sessions/' + fbKey(currentUser.uid));
+    const handler = s => {
+      const v = s.val();
+      if (!v) return;
+      if (v.deviceId && v.deviceId !== deviceId) {
+        toast('Вход с другого устройства — сессия завершена');
+        logout();
+      } else if (v.deviceId === deviceId) {
+        // heartbeat session
+        ref.update({ ts: Date.now() });
+      }
+    };
+    ref.on('value', handler);
+    window._sessionUnsub = () => ref.off('value', handler);
+    if (window._sessionBeat) clearInterval(window._sessionBeat);
+    window._sessionBeat = setInterval(() => {
+      if (currentUser && dbRef) {
+        dbRef.ref('/sessions/' + fbKey(currentUser.uid)).update({ ts: Date.now(), deviceId: getDeviceId() });
+      }
+    }, 30000);
+  } catch (e) {}
+}
+
+function loginAsGuest() {
+  const id = Math.random().toString(36).slice(2, 9);
+  return { login: 'Гость_' + id.slice(0, 4), uid: 'guest_' + id, guest: true };
+}
+
+async function onLoggedIn(user) {
+  currentUser = user;
+  localStorage.setItem('tetrisSession', JSON.stringify({ login: user.login, uid: user.uid, guest: !!user.guest }));
+  localStorage.setItem('tetrisName', user.login);
+  updateUserBar();
+  if (user.guest) {
+    applyUserData(defaultUserData());
+  } else {
+    await loadUserData(user.uid);
+  }
+  try { startPresence(); } catch (e) {}
+  try { listenInvites(); } catch (e) {}
+  try { listenOnlineCount(); } catch (e) {}
+  try { watchSessionKick(); } catch (e) {}
+  showScreen(modeScreen);
+  // ensure visible on mobile
+  const ms = document.getElementById('mode-screen');
+  if (ms) {
+    ms.style.display = 'flex';
+    ms.style.opacity = '1';
+    ms.classList.add('active-screen');
+  }
+  const as = document.getElementById('auth-screen');
+  if (as) {
+    as.style.display = 'none';
+    as.classList.remove('active-screen');
+  }
+  toast('Привет, ' + user.login + '!');
+}
+
+function logout() {
+  clearStickyToast();
+  window._quickSearching = false;
+  clearPresenceNow();
+  if (inviteUnsub) { try { inviteUnsub(); } catch(e) {} }
+  if (window._sessionUnsub) { try { window._sessionUnsub(); } catch(e) {} }
+  if (window._sessionBeat) clearInterval(window._sessionBeat);
+  try {
+    if (dbRef && currentUser && !currentUser.guest) {
+      dbRef.ref('/sessions/' + fbKey(currentUser.uid)).remove();
+    }
+  } catch(e) {}
+  currentUser = null;
+  localStorage.removeItem('tetrisSession');
+  updateUserBar();
+  updateOnlineUI(0);
+  showScreen(document.getElementById('auth-screen'));
+}
+
+function bindAuthUI() {
+  let mode = 'login';
+  const pass2 = document.getElementById('auth-pass2');
+  const err = document.getElementById('auth-error');
+  const submit = document.getElementById('auth-submit');
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      mode = tab.getAttribute('data-tab');
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t === tab));
+      if (pass2) pass2.style.display = mode === 'register' ? '' : 'none';
+      if (submit) submit.textContent = mode === 'register' ? 'Зарегистрироваться' : 'Войти';
+      const sub = document.getElementById('auth-subtitle');
+      if (sub) sub.textContent = mode === 'register' ? 'создай аккаунт' : 'вход в аккаунт';
+      if (err) err.textContent = '';
+    });
+  });
+  function clearAuthError() {
+    if (err) { err.textContent = ''; err.hidden = true; }
+  }
+  async function doAuth(e) {
+    if (e) e.preventDefault();
+    clearAuthError();
+    const login = (document.getElementById('auth-login')?.value || '').trim();
+    const pass = document.getElementById('auth-pass')?.value || '';
+    const p2 = document.getElementById('auth-pass2')?.value || '';
+    try {
+      let user;
+      if (mode === 'register') {
+        if (pass !== p2) throw new Error('Пароли не совпадают');
+        user = await registerUser(login, pass);
+      } else {
+        user = await loginUser(login, pass);
+      }
+      clearAuthError();
+      onLoggedIn(user);
+    } catch (ex) {
+      console.error(ex);
+      clearAuthError();
+      toast(ex.message || 'Ошибка входа');
+    }
+  }
+  document.getElementById('auth-form')?.addEventListener('submit', doAuth);
+  document.getElementById('auth-submit')?.addEventListener('click', (e) => {
+    // mobile sometimes skips submit
+    const form = document.getElementById('auth-form');
+    if (form && !form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    doAuth(e);
+  });
+  document.getElementById('auth-guest')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    clearAuthError();
+    onLoggedIn(loginAsGuest());
+  });
+  document.getElementById('auth-guest')?.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    clearAuthError();
+    onLoggedIn(loginAsGuest());
+  }, { passive: false });
+  document.getElementById('logout-btn')?.addEventListener('click', logout);
+}
+
+// ===================== DUEL LOBBY =====================
+function openDuelLobby() {
+  if (!currentUser) {
+    toast('Сначала войди в аккаунт');
+    showScreen(document.getElementById('auth-screen'));
+    return;
+  }
+  const sc = document.getElementById('duel-lobby-screen');
+  showScreen(sc);
+  if (sc) {
+    sc.style.display = 'flex';
+    sc.classList.add('active-screen');
+  }
+  try { setPresence('searching'); } catch (e) {}
+  refreshPlayerList();
+  // ensure invite UI exists even outside lobby
+  ensureInviteBox();
+}
+
+function ensureInviteBox() {
+  let box = document.getElementById('duel-incoming');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'duel-incoming';
+    box.className = 'duel-incoming';
+    box.style.display = 'none';
+    document.body.appendChild(box);
+  }
+  return box;
+}
+
+function renderPlayersList(players) {
+  const list = document.getElementById('duel-players-list');
+  if (!list) return;
+  if (!players.length) {
+    list.innerHTML = '<div class="list-item"><div class="li-desc">Нет игроков онлайн. Подожди или обнови список.</div></div>';
+    return;
+  }
+  list.innerHTML = players.map(p => {
+    const st = p.status === 'in_game' ? 'в игре' : p.status === 'searching' ? 'ищет дуэль' : 'онлайн';
+    const busy = p.status === 'in_game';
+    const uid = fbKey(p.uid || p.login);
+    return `<div class="list-item">
+      <div class="li-body" style="flex:1">
+        <div class="li-name">${p.login}</div>
+        <div class="player-status ${busy ? 'busy' : ''}">${st}</div>
+      </div>
+      <button type="button" class="challenge-btn" data-uid="${uid}" data-name="${(p.login||'').replace(/"/g,'')}" ${busy ? 'disabled' : ''}>Вызвать</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.challenge-btn').forEach(btn => {
+    btn.onclick = () => challengePlayer(btn.getAttribute('data-uid'), btn.getAttribute('data-name'));
+  });
+}
+
+function refreshPlayerList() {
+  const list = document.getElementById('duel-players-list');
+  if (!list) return;
+  const q = (document.getElementById('duel-search')?.value || '').trim().toLowerCase();
+  list.innerHTML = '<div class="list-item"><div class="li-desc">Загрузка игроков...</div></div>';
+  if (!dbRef) {
+    list.innerHTML = '<div class="list-item"><div class="li-desc">Нет сети — дуэль только онлайн</div></div>';
+    return;
+  }
+  const myId = fbKey(currentUser.uid);
+  dbRef.ref('/presence').once('value').then(snap => {
+    const players = [];
+    const now = Date.now();
+    snap.forEach(c => {
+      const v = c.val();
+      if (!v || !v.login) return;
+      const id = fbKey(v.uid || c.key);
+      if (id === myId) return;
+      if (v.ts && now - v.ts > 45000) return;
+      if (q && !String(v.login).toLowerCase().includes(q)) return;
+      players.push({ login: v.login, uid: id, status: v.status || 'online', ts: v.ts });
+    });
+    players.sort((a, b) => String(a.login).localeCompare(String(b.login)));
+    renderPlayersList(players);
+  }).catch(() => {
+    list.innerHTML = '<div class="list-item"><div class="li-desc">Ошибка загрузки списка</div></div>';
+  });
+}
+
+function challengePlayer(uid, name) {
+  if (!dbRef || !currentUser || !uid) return;
+  if (currentUser.guest) {
+    toast('Для вызова нужна регистрация');
+    return;
+  }
+  const myId = fbKey(currentUser.uid);
+  const theirId = fbKey(uid);
+  // Create room first — both will watch this room
+  const roomId = dbRef.ref('/duelRooms').push().key;
+  const room = {
+    host: myId,
+    hostName: currentUser.login,
+    guest: theirId,
+    guestName: name || 'Игрок',
+    hostScore: 0,
+    guestScore: 0,
+    status: 'pending',
+    target: settings.duelTarget || 5000,
+    ts: Date.now()
+  };
+  dbRef.ref('/duelRooms/' + roomId).set(room).then(() => {
+    // invite to opponent
+    return dbRef.ref('/duelInvites/' + theirId + '/' + myId).set({
+      fromName: currentUser.login,
+      fromUid: myId,
+      roomId,
+      status: 'pending',
+      ts: Date.now()
+    });
+  }).then(() => {
+    toast('Вызов отправлен: ' + name + ' — ждём...');
+    // Challenger watches room → when active, enter game
+    if (window._roomWaitUnsub) { try { window._roomWaitUnsub(); } catch(e) {} }
+    const roomRef = dbRef.ref('/duelRooms/' + roomId);
+    const handler = (s) => {
+      const v = s.val();
+      if (!v) return;
+      if (v.status === 'active') {
+        roomRef.off('value', handler);
+        window._roomWaitUnsub = null;
+        startDuelWithRoom(roomId, v);
+      } else if (v.status === 'declined' || v.status === 'cancelled') {
+        roomRef.off('value', handler);
+        window._roomWaitUnsub = null;
+        try { roomRef.remove(); } catch(e) {}
+        toast(v.status === 'declined' ? 'Вызов отклонён' : 'Вызов отменён');
+      }
+    };
+    roomRef.on('value', handler);
+    window._roomWaitUnsub = () => roomRef.off('value', handler);
+    setTimeout(() => {
+      if (window._roomWaitUnsub) {
+        try { window._roomWaitUnsub(); } catch(e) {}
+        window._roomWaitUnsub = null;
+        roomRef.once('value').then(s => {
+          const v = s.val();
+          if (v && v.status === 'pending') {
+            roomRef.update({ status: 'cancelled' });
+            try { dbRef.ref('/duelInvites/' + theirId + '/' + myId).remove(); } catch(e) {}
+          }
+        });
+      }
+    }, 60000);
+  }).catch((e) => {
+    console.warn(e);
+    toast('Не удалось отправить вызов');
+  });
+}
+
+function declineInvite(fromUid) {
+  if (!dbRef || !currentUser) return;
+  const myId = fbKey(currentUser.uid);
+  const theirId = fbKey(fromUid);
+  dbRef.ref('/duelInvites/' + myId + '/' + theirId).once('value').then(s => {
+    const v = s.val();
+    if (v && v.roomId) {
+      dbRef.ref('/duelRooms/' + v.roomId).update({ status: 'declined' });
+    }
+    dbRef.ref('/duelInvites/' + myId + '/' + theirId).remove();
+  });
+}
+
+function acceptInvite(fromUid, fromName) {
+  if (!dbRef || !currentUser) return;
+  const myId = fbKey(currentUser.uid);
+  const theirId = fbKey(fromUid);
+  const invRef = dbRef.ref('/duelInvites/' + myId + '/' + theirId);
+  invRef.once('value').then(s => {
+    const inv = s.val();
+    if (!inv || !inv.roomId) {
+      toast('Вызов устарел');
+      invRef.remove();
+      return;
+    }
+    const roomId = inv.roomId;
+    const roomRef = dbRef.ref('/duelRooms/' + roomId);
+    return roomRef.update({
+      status: 'active',
+      guest: myId,
+      guestName: currentUser.login,
+      guestScore: 0,
+      ts: Date.now()
+    }).then(() => invRef.remove()).then(() => {
+      return roomRef.once('value');
+    }).then(rs => {
+      startDuelWithRoom(roomId, rs.val());
+    });
+  }).catch((e) => {
+    console.warn(e);
+    toast('Не удалось принять вызов');
+  });
+}
+
+function startDuelWithRoom(roomId, room) {
+  if (!roomId) return;
+  // prevent double-start
+  if (window._duelStarting) return;
+  window._duelStarting = true;
+  setTimeout(() => { window._duelStarting = false; }, 1500);
+
+  if (window._botTimer) { clearInterval(window._botTimer); window._botTimer = null; }
+  if (window._roomWaitUnsub) { try { window._roomWaitUnsub(); } catch(e) {} window._roomWaitUnsub = null; }
+
+  duelId = roomId;
+  gameMode = 'duel';
+  duelOppScore = 0;
+  ensureAudio();
+  try { startGame(); } catch (e) { console.error(e); }
+  stopDuelListenersOnly();
+
+  if (dbRef) {
+    const ref = dbRef.ref('/duelRooms/' + roomId);
+    const handler = s => {
+      const v = s.val();
+      if (!v) return;
+      const myId = currentUser ? fbKey(currentUser.uid) : '';
+      const isHost = myId && String(v.host) === myId;
+      const myScoreCloud = isHost ? (v.hostScore || 0) : (v.guestScore || 0);
+      duelOppScore = isHost ? (v.guestScore || 0) : (v.hostScore || 0);
+      const el = document.getElementById('duel-opp');
+      if (el) el.textContent = String(duelOppScore);
+      const target = settings.duelTarget || 5000;
+
+      if (gameOver) return;
+
+      // Opponent finished the duel for both
+      if (v.status === 'finished') {
+        duelOppScore = isHost ? (v.guestScore || 0) : (v.hostScore || 0);
+        endGame(String(v.winner) === String(myId));
+        return;
+      }
+
+      // Opponent reached target first
+      if (duelOppScore >= target && score < target) {
+        try {
+          ref.update({
+            status: 'finished',
+            winner: isHost ? v.guest : v.host,
+            hostScore: isHost ? score : duelOppScore,
+            guestScore: isHost ? duelOppScore : score
+          });
+        } catch(e) {}
+        endGame(false);
+      }
+    };
+    ref.on('value', handler);
+    duelUnsub = () => ref.off('value', handler);
+  }
+
+  showScreen(gameDiv);
+  if (gameDiv) {
+    gameDiv.style.display = 'flex';
+    gameDiv.classList.add('active-screen');
+  }
+  paused = false;
+  gameOver = false;
+  const dc = document.getElementById('duel-card');
+  if (dc) dc.style.display = '';
+  const el = document.getElementById('duel-opp');
+  if (el) el.textContent = '0';
+  const dt = document.getElementById('duel-target-val');
+  if (dt) dt.textContent = String(settings.duelTarget || 5000);
+  try { setPresence('in_game'); } catch (e) {}
+  toast('⚔️ Дуэль началась!');
+}
+
+function stopDuelListenersOnly() {
+  if (duelUnsub) { try { duelUnsub(); } catch(e) {} duelUnsub = null; }
+}
+
+const _publishDuelScoreOrig = typeof publishDuelScore === 'function' ? publishDuelScore : null;
+publishDuelScore = function() {
+  if (gameMode !== 'duel' || !duelId) return;
+  if (dbRef && currentUser) {
+    try {
+      const myId = fbKey(currentUser.uid);
+      const ref = dbRef.ref('/duelRooms/' + duelId);
+      ref.once('value').then(s => {
+        const v = s.val();
+        if (!v) {
+          if (_publishDuelScoreOrig) _publishDuelScoreOrig();
+          return;
+        }
+        if (String(v.host) === myId) ref.update({ hostScore: score });
+        else if (String(v.guest) === myId) ref.update({ guestScore: score });
+      });
+      return;
+    } catch (e) {}
+  }
+  if (_publishDuelScoreOrig) _publishDuelScoreOrig();
+};
+
+function quickMatch() {
+  if (!currentUser) {
+    toast('Сначала войди');
+    return;
+  }
+  if (!dbRef) {
+    toast('Нужна сеть для дуэли');
+    return;
+  }
+  if (currentUser.guest) {
+    toast('Для дуэли нужна регистрация');
+    return;
+  }
+  if (window._quickSearching) return;
+  window._quickSearching = true;
+  toast('⚡ Ищем игрока...', { sticky: true });
+  setPresence('searching');
+  const myId = fbKey(currentUser.uid);
+  const waiting = dbRef.ref('/duelWaiting');
+
+  const cleanupWait = (ref) => {
+    try { if (ref) ref.remove(); } catch(e) {}
+    if (window._quickHandler && ref) {
+      try { ref.off('value', window._quickHandler); } catch(e) {}
+      window._quickHandler = null;
+    }
+  };
+
+  waiting.once('value').then(snap => {
+    let joined = false;
+    snap.forEach(child => {
+      if (joined) return;
+      const v = child.val();
+      if (v && v.status === 'waiting' && String(v.host) !== myId) {
+        joined = true;
+        const roomId = child.key;
+        const room = {
+          host: v.host,
+          hostName: v.hostName || 'Игрок',
+          guest: myId,
+          guestName: currentUser.login,
+          hostScore: 0,
+          guestScore: 0,
+          status: 'active',
+          target: settings.duelTarget || 5000,
+          ts: Date.now()
+        };
+        child.ref.update({ status: 'matched', guest: myId, guestName: currentUser.login }).then(() => {
+          return dbRef.ref('/duelRooms/' + roomId).set(room);
+        }).then(() => {
+          window._quickSearching = false;
+          clearStickyToast();
+          toast('Соперник найден!');
+          startDuelWithRoom(roomId, room);
+        });
+      }
+    });
+    if (!joined) {
+      const ref = waiting.push({
+        host: myId,
+        hostName: currentUser.login,
+        status: 'waiting',
+        ts: Date.now()
+      });
+      const handler = s => {
+        const v = s.val();
+        if (!v) return;
+        if ((v.status === 'matched' || v.status === 'active') && v.guest) {
+          ref.off('value', handler);
+          window._quickHandler = null;
+          const roomId = ref.key;
+          const room = {
+            host: myId,
+            hostName: currentUser.login,
+            guest: v.guest,
+            guestName: v.guestName || 'Игрок',
+            hostScore: 0,
+            guestScore: 0,
+            status: 'active',
+            target: settings.duelTarget || 5000,
+            ts: Date.now()
+          };
+          dbRef.ref('/duelRooms/' + roomId).set(room).then(() => {
+            try { ref.remove(); } catch(e) {}
+            window._quickSearching = false;
+            clearStickyToast();
+            toast('Соперник найден!');
+            startDuelWithRoom(roomId, room);
+          });
+        }
+      };
+      window._quickHandler = handler;
+      ref.on('value', handler);
+      // keep sticky toast until match; cancel after 2 min
+      setTimeout(() => {
+        if (window._quickSearching) {
+          window._quickSearching = false;
+          cleanupWait(ref);
+          clearStickyToast();
+          toast('Никого не найдено');
+          setPresence('online');
+        }
+      }, 120000);
+    }
+  }).catch(() => {
+    window._quickSearching = false;
+    clearStickyToast();
+    toast('Ошибка поиска');
+  });
+}
+
+function bindDuelLobbyUI() {
+  document.getElementById('duel-lobby-back')?.addEventListener('click', () => {
+    setPresence('online');
+    showScreen(modeScreen);
+  });
+  document.getElementById('duel-refresh')?.addEventListener('click', refreshPlayerList);
+  document.getElementById('duel-search')?.addEventListener('input', () => {
+    clearTimeout(window._duelSearchT);
+    window._duelSearchT = setTimeout(refreshPlayerList, 250);
+  });
+  document.getElementById('duel-quick')?.addEventListener('click', quickMatch);
+}
+
+// duel handled in startModeFromCard
+
 // ===================== INIT =====================
 updateScore();
 updateBalance();
 updateCaseTimer();
-showScreen(modeScreen);
+setupThemeOfDay();
+bindSettings();
+updateProfileUI();
+bindAuthUI();
+bindDuelLobbyUI();
 update();
 
-// Firebase
 try {
-  const firebaseConfig = {
-    apiKey: "AIzaSyB1N9wwPZh1vQkIt-V7by8FW-7xoZobsDg",
-    authDomain: "tetris2-71bfa.firebaseapp.com",
-    databaseURL: "https://tetris2-71bfa-default-rtdb.firebaseio.com",
-    projectId: "tetris2-71bfa",
-    storageBucket: "tetris2-71bfa.appspot.com",
-    messagingSenderId: "38355194193",
-    appId: "1:38355194193:web:93229f575c86111a8f7af0"
-  };
   if (typeof firebase !== 'undefined') {
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-    const id = Math.random().toString(36).substring(2);
-    const presenceRef = db.ref('/online/' + id);
-    presenceRef.set(true);
-    presenceRef.onDisconnect().remove();
-    db.ref('/online').on('value', snapshot => {
-      const el = document.getElementById('online-count');
-      if (el) el.textContent = snapshot.numChildren();
-    });
+    if (!firebase.apps || !firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    dbRef = firebase.database();
+    firebaseReady = true;
+    listenOnlineCount();
+    bindPresenceUnload();
+  } else {
+    console.warn('Firebase SDK not loaded');
+    updateOnlineUI(0);
   }
-} catch (e) { console.warn('Firebase', e); }
+} catch (e) {
+  console.warn('Firebase', e);
+  updateOnlineUI(0);
+}
+
+// restore session
+try {
+  const sess = JSON.parse(localStorage.getItem('tetrisSession') || 'null');
+  // always require login after open / refresh
+  localStorage.removeItem('tetrisSession');
+  currentUser = null;
+  applyUserData(defaultUserData());
+  showScreen(document.getElementById('auth-screen'));
+} catch (e) {
+  showScreen(document.getElementById('auth-screen'));
+}
+
